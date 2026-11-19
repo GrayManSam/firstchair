@@ -1,14 +1,129 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from uuid import uuid4
 
-from triadmux.workflow import record_path, run_workflow
+from triadmux.workflow import record_path, recover_workflow, run_workflow, save
 
 
 class WorkflowTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "requires POSIX file locking")
+    def test_recover_after_controller_crash_refuses_live_run(self):
+        script = """
+import sys
+from pathlib import Path
+
+from triadmux.workflow import run_workflow
+
+run_workflow("synthetic task", Path(sys.argv[1]), str, lambda _: input(), str)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            command = [sys.executable, "-m", "triadmux", "--state-dir", directory]
+            with subprocess.Popen(
+                [sys.executable, "-c", script, directory], stdin=subprocess.PIPE
+            ) as controller:
+                try:
+                    deadline = time.monotonic() + 5
+                    record = None
+                    while time.monotonic() < deadline and controller.poll() is None:
+                        for path in Path(directory).glob("*.json"):
+                            snapshot = json.loads(path.read_text(encoding="utf-8"))
+                            if snapshot["stage"] == "review":
+                                record = snapshot
+                        if record is not None:
+                            break
+                        time.sleep(0.01)
+                    self.assertIsNotNone(record)
+                    run_id = record["run_id"]
+                    active = subprocess.run(
+                        [*command, "recover", run_id],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    self.assertEqual(active.returncode, 1)
+                    self.assertIn("locked", json.loads(active.stderr)["error"])
+                    self.assertEqual(
+                        json.loads(record_path(Path(directory), run_id).read_text(encoding="utf-8")),
+                        record,
+                    )
+                finally:
+                    controller.kill()
+                    controller.wait(timeout=5)
+
+            recovered = subprocess.run(
+                [*command, "recover", run_id],
+                capture_output=True, text=True, timeout=5, check=True,
+            )
+            expected = dict(record, status="interrupted", error="controller_crash")
+            self.assertEqual(json.loads(recovered.stdout), expected)
+            status = subprocess.run(
+                [*command, "status", run_id],
+                capture_output=True, text=True, timeout=5,
+            )
+            self.assertEqual(status.returncode, 1)
+            self.assertEqual(json.loads(status.stdout), expected)
+            with self.assertRaisesRegex(ValueError, "only running records"):
+                recover_workflow(Path(directory), run_id)
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX file locking")
+    def test_recovery_preserves_legacy_and_unsupported_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory)
+            run_id = str(uuid4())
+            path = record_path(state_dir, run_id)
+            legacy = dict(schema_version=1, run_id=run_id, status="running", stage="plan")
+            save(path, legacy)
+            with self.assertRaisesRegex(ValueError, "no recovery lock"):
+                recover_workflow(state_dir, run_id)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), legacy)
+
+            unsupported = dict(legacy, schema_version=2)
+            save(path, unsupported)
+            path.with_suffix(".lock").touch()
+            with self.assertRaisesRegex(ValueError, "unsupported run record"):
+                recover_workflow(state_dir, run_id)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), unsupported)
+
+            path.write_text("{", encoding="utf-8")
+            with self.assertRaises(json.JSONDecodeError):
+                recover_workflow(state_dir, run_id)
+            self.assertEqual(path.read_text(encoding="utf-8"), "{")
+
+    def test_dry_run_reports_limits_without_executing_or_creating_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory, "state")
+            command = [sys.executable, "-m", "triadmux", "--state-dir", str(state_dir)]
+            output = subprocess.check_output(
+                [*command, "run", "--provider", "synthetic", "--dry-run", "--timeout", "2",
+                 "--total-timeout", "3", "--max-output-bytes", "1", "--max-input-bytes", "2",
+                 "private synthetic prompt"],
+                text=True, timeout=10,
+            )
+            self.assertEqual(json.loads(output), {
+                "status": "planned",
+                "provider": "synthetic",
+                "selection": "explicit",
+                "routing": {
+                    "demo": "requires_explicit_selection",
+                    "synthetic": "selected",
+                    "codex": "adapter_unavailable",
+                    "claude": "adapter_unavailable",
+                    "grok": "adapter_unavailable",
+                },
+                "stages": ["plan", "review", "synthesize"],
+                "limits": {
+                    "stage_timeout": 2.0,
+                    "stage_output_bytes": 1,
+                    "stage_input_bytes": 2,
+                    "total_timeout": 3.0,
+                },
+            })
+            self.assertFalse(state_dir.exists())
+
     def test_cli_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             command = [sys.executable, "-m", "triadmux", "--state-dir", directory]

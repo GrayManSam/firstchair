@@ -6,11 +6,57 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from triadmux.provider import ExecutionLimits, ProviderError, invoke
+from triadmux.provider import ExecutionLimits, ProviderError, SyntheticProvider, invoke
 
 
 class ProviderTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "requires POSIX signals")
+    def test_sigint_during_launch_reaps_worker_and_persists_interrupt(self):
+        # Hold the process handle until the controller has received SIGINT.
+        script = """
+import asyncio
+import os
+import signal
+import sys
+from unittest.mock import patch
+
+from triadmux.cli import main
+
+spawn = asyncio.create_subprocess_exec
+workers = []
+
+async def interrupt_on_launch(*args, **kwargs):
+    worker = await spawn(sys.executable, "-c", "import time; time.sleep(30)", **kwargs)
+    workers.append(worker)
+    os.kill(os.getpid(), signal.SIGINT)
+    await asyncio.sleep(0)
+    return worker
+
+with patch("asyncio.create_subprocess_exec", interrupt_on_launch):
+    status = main(["--state-dir", sys.argv[1], "run", "--provider", "synthetic", "task"])
+
+assert [worker.returncode for worker in workers] == [-signal.SIGKILL]
+raise SystemExit(status)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            run = subprocess.run(
+                [sys.executable, "-c", script, directory],
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(run.returncode, 1, run.stderr)
+            record = json.loads(run.stdout)
+            self.assertEqual(record["status"], "interrupted")
+            self.assertEqual(record["stage"], "plan")
+            saved = subprocess.run(
+                [sys.executable, "-m", "triadmux", "--state-dir", directory,
+                 "status", record["run_id"]],
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(saved.returncode, 1, saved.stderr)
+            self.assertEqual(json.loads(saved.stdout), record)
+
     def test_synthetic_subprocess_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             command = [sys.executable, "-m", "triadmux", "--state-dir", directory]
@@ -21,10 +67,27 @@ class ProviderTests(unittest.TestCase):
             record = json.loads(run.stdout)
             self.assertEqual(record["status"], "completed")
             self.assertIn("Review the README", record["result"])
+            review = record["worker_review"]
+            self.assertIn("Review the README", review["assignment"])
+            self.assertIn(review["validation_step"], record["result"])
             saved = subprocess.check_output(
                 [*command, "status", record["run_id"]], text=True, timeout=10
             )
             self.assertEqual(json.loads(saved), record)
+
+    def test_synthetic_review_requires_structured_result(self):
+        for malformed in (
+            "plain text",
+            {"assignment": "Review the README"},
+            {"assignment": "Review the README", "validation_step": ""},
+        ):
+            response = json.dumps({"schema_version": 1, "result": malformed}).encode()
+            with (
+                self.subTest(result=malformed),
+                patch("triadmux.provider._read_response", return_value=response),
+                self.assertRaisesRegex(ProviderError, "^malformed_response$"),
+            ):
+                SyntheticProvider(ExecutionLimits()).run("review", "synthetic assignment")
 
     def test_output_limit_failure_is_persisted(self):
         with tempfile.TemporaryDirectory() as directory:

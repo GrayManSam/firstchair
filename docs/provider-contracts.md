@@ -1,7 +1,8 @@
 # Provider contract inventory
 
-The following versions were present during local discovery. Authentication and live event compatibility need independent verification
-before enabling adapters. See the smoke attempt below.
+The following versions were present during local discovery. The workflow
+currently accepts the bundled synthetic provider. The live-provider commands
+below are candidates for future adapters.
 
 | Provider | Observed version | Candidate headless contract |
 | --- | --- | --- |
@@ -14,10 +15,91 @@ and cancellation, authentication failure and unknown usage with fixtures.
 Treat provider output as data. Keep executable selection, working directory,
 permissions and budget in controller-owned policy.
 
-- [Codex non-interactive mode](https://developers.openai.com/codex/noninteractive)
-- [Claude Code programmatic usage](https://code.claude.com/docs/en/headless)
-- [Grok Build headless scripting](https://docs.x.ai/build/cli/headless-scripting)
-- [Grok Build permissions](https://docs.x.ai/build/features/permissions)
+## Candidate result parsing
+
+### Codex CLI 0.170.0
+
+The candidate command is `codex --ask-for-approval never exec --ephemeral
+--sandbox read-only --skip-git-repo-check --json -`. The final hyphen
+selects stdin for the prompt. The pinned source defines response text in
+`item.completed` events containing an `agent_message` item, turn usage in
+`turn.completed`, and failure in `turn.failed` or a top-level `error`
+event. A future adapter should require a complete successful turn and a
+successful process exit before accepting the response. The smoke checker
+only looks for its marker in a completed agent message. Verify inherited
+configuration and tool availability before launching unattended work.
+[0.170.0 CLI arguments](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/exec/src/cli.rs) ·
+[0.170.0 event definitions](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/exec/src/exec_events.rs)
+
+Example success stream with invented identifiers, reply and counts.
+
+```jsonl
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000001"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Synthetic reply"}}
+{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":3,"reasoning_output_tokens":0}}
+```
+
+### Claude Code 2.1.328
+
+The host smoke command uses `claude -p TASK --tools "" --setting-sources ""
+--no-session-persistence --output-format json`. JSON mode yields a single
+result object. A future adapter should require a successful process exit,
+a successful result envelope and the expected payload. If it opts into
+`--json-schema`, it must validate `structured_output` from that envelope.
+An empty tool list disables built-in tools. Verify remaining configuration
+and tool sources independently before enabling unattended runs. [2.1.328
+release](https://github.com/anthropics/claude-code/releases/tag/v2.1.328) ·
+[Headless output](https://code.claude.com/docs/en/headless#get-structured-output) ·
+[CLI flags](https://code.claude.com/docs/en/cli-reference)
+
+The standalone parser gates on 2.1.328 and a successful exit. It requires
+one UTF-8 JSON object with an explicit success subtype, `is_error: false`
+and a nonblank `result` string. The [Agent SDK final result
+reference](https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage)
+documents the status fields. The public 2.1.328 release notes do not pin
+the full JSON envelope, and the host smoke checker only verifies the
+result type and marker. The candidate shape below is an invented fixture.
+Before enabling an adapter, verify these fields against a sanitized
+2.1.328 response. Structured output and usage remain outside this parser.
+
+```json
+{"type":"result","subtype":"success","is_error":false,"result":"Synthetic reply"}
+```
+
+### Grok Build 1.0.77
+
+The host evidence establishes newline-delimited JSON framing for
+`grok --no-auto-update -p TASK --output-format streaming-json`.
+The current smoke command uses `--output-format plain` for the final reply
+check. The streaming terminal event, usage fields and unattended tool
+denial behavior for 1.0.77 remain unverified. Leave the streaming parser
+disabled until there is version-specific evidence for those fields. [Headless
+output modes](https://docs.x.ai/build/cli/headless-scripting) ·
+[Permissions](https://docs.x.ai/build/features/permissions)
+
+For all candidates, reject unverified CLI versions before launching work.
+Provider-reported token counts can inform usage reporting. Record usage as
+unknown when the supported event stream omits it. A provider's token count
+does not establish a billable amount.
+
+## Claude Swap alpha decision
+
+Defer the optional Claude Swap bridge. The alpha workflow runs offline and
+has no live Claude Code adapter. Adding account status now would introduce
+provider state and potential usage refreshes without improving the
+synthetic workflow. The earlier [pinned source review](upstream-review.md)
+covers version 1.2.0b1. No Claude Swap invocation or synthetic installation
+was needed for the decision to defer.
+
+If a later release needs quota visibility, evaluate an explicit opt-in
+reader for `cswap status --json`. Upstream documents a single JSON object
+with `schemaVersion: 1` and distinguishes current usage from cached,
+unavailable and last-known readings. Test a synthetic executable for
+valid, stale, missing and unsupported responses before enabling a reader.
+Keep any account identifiers out of persisted workflow records. Account
+switching and credential handling remain outside the proposed reader.
+[Claude Swap JSON output reference](https://github.com/realiti4/claude-swap/blob/main/docs/json-output.md)
 
 ## Live smoke attempt
 

@@ -18,12 +18,21 @@
 - [x] Build one offline vertical slice with a synthetic CLI, config validation, explicit provider selection, bounded execution and durable state.
 - [x] Test malformed responses, output limits, stage timeouts, saved-state reads and classified failures.
 - [x] Clean up POSIX workers and their process group on stage failure or timeout.
-- [ ] Verify cancellation and crash recovery before enabling live subprocesses.
+- [x] Verify Ctrl-C during synthetic worker startup reaps the process and records an interrupted run.
+- [x] Recover abandoned synthetic run records after a controller crash on POSIX.
+- [x] List saved run IDs, stages, and statuses without printing task or result content.
+- [x] Verify bundled POSIX synthetic worker exit after controller SIGKILL.
+- [ ] Verify crash cleanup and workspace isolation for live provider process trees.
+- [x] Preview selected stages and execution limits without starting workers.
 - [ ] Add real provider adapters and complete credential-free CI fixtures before opt-in live smoke tests.
-- [ ] Implement scoped, user-approved Leader-to-worker delegation and structured synthesis. Verify the complete path with synthetic workers.
-- [ ] Add enforceable task and execution budgets, usage provenance and routing explanations. Test unknown usage and budget rejection.
-- [ ] Decide whether to include optional claude-swap support and verify its behavior with a synthetic installation.
-- [ ] Verify installed-package examples, update the support matrix and publish the alpha prerelease.
+- [x] Exercise offline Codex and Claude Code output parsing with synthetic fixtures.
+- [x] Verify a structured synthetic Leader-to-worker review and synthesis with explicit run selection.
+- [x] Enforce a shared time budget across synthetic stages and test budget rejection.
+- [x] Enforce per-stage request byte budgets and expose synthetic limits through explicit TOML configuration.
+- [x] Report offline usage as unknown and explain provider readiness and routing.
+- [x] Defer optional Claude Swap support for alpha and document acceptance cases for a future bridge.
+- [x] Verify installed-package examples locally and add a release-wheel smoke check.
+- [ ] Verify the hosted support matrix and publish the alpha prerelease.
 
 ## Beta and release
 

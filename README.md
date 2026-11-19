@@ -17,23 +17,57 @@ triadmux run --demo "Review the project's build instructions"
 triadmux status <run-id>
 ```
 
-`doctor` locates Codex, Claude Code and Grok executables on PATH. The demo
-works without any of them installed or authenticated. Run records can contain
-your task and result. They live in the ignored `.triadmux/` directory by
-default. Use `triadmux --state-dir PATH` to select another location. An
-interrupted run remains inspectable. There is no automatic replay.
+`doctor` locates Codex, Claude Code and Grok executables on PATH and reports
+each provider's readiness without launching it. The bundled synthetic provider
+is ready offline. Run records can contain your task and result. They live in
+the ignored `.triadmux/` directory by default. Use `triadmux --state-dir PATH`
+to select another location.
 
-The same handoff can run through the bundled synthetic subprocess adapter.
-Each stage has its own timeout and stdout limit. Status records include a
-failure code when the provider exits early, exceeds a limit, or returns an
-invalid response.
+The bundled synthetic subprocess adapter simulates a read-only handoff. Run
+it by explicitly choosing `--provider synthetic` and passing a task. On success,
+the run record includes the worker's structured review and the synthesis
+result. Offline runs record token usage as unknown with null counts.
 
 ```sh
-triadmux run --provider synthetic --timeout 5 --max-output-bytes 65536 "Review the build"
+triadmux run --provider synthetic --dry-run --timeout 5 --total-timeout 10 "Review the build"
+triadmux run --provider synthetic --timeout 5 --total-timeout 10 "Review the build"
 ```
 
-The adapter currently runs only the bundled synthetic worker. Live provider
-support will require workspace isolation and process-tree cleanup.
+`--dry-run` explains provider selection and shows the stage limits without
+starting workers or creating a run record. `--max-input-bytes` applies to each
+UTF-8 JSON request, including the envelope. Oversized requests fail with
+`input_limit` before worker startup. Each worker also has a stdout byte limit
+and a timeout. `--total-timeout` sets a shared budget across stages and reports
+`budget_exhausted` when it expires. Cleanup can add time before the command
+returns.
+
+Pass `--config limits.toml` to reuse synthetic limits. Explicit flags take
+precedence over the file, and omitted values use the bundled defaults. Select
+the run mode on the command line.
+
+```toml
+[synthetic]
+timeout = 5
+total_timeout = 10
+max_input_bytes = 65536
+max_output_bytes = 65536
+```
+
+Use `triadmux runs` to find saved runs by ID, status, and stage. On POSIX,
+`triadmux recover <run-id>` marks an abandoned run as interrupted once the
+controller releases its run lock. Recovery updates the record only.
+It requires a lock file created by the original run. Keep each run's
+`.lock` file alongside its JSON record. A lifetime pipe stops bundled POSIX
+workers when their controller dies.
+
+Live adapters are disabled pending workspace isolation, process-tree cleanup,
+and version-specific contract verification.
+
+## Verification
+
+CI is configured for Ubuntu 24.04 with Python 3.12–3.14 and macOS with Python
+3.12. The release workflow installs the wheel on Ubuntu with Python 3.12
+and compares a completed synthetic workflow with its saved status.
 
 Run the tests with `PYTHONPATH=src python -m unittest discover -s tests -v`.
 See [the roadmap](ROADMAP.md) for alpha, beta and release gates and

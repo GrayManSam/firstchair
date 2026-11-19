@@ -74,8 +74,60 @@ jobs:
           python -m build
       - name: Smoke-test the distribution and record checksums
         run: |
-          python -m pip install --no-deps dist/*.whl
-          triadmux --version | grep -F "${GITHUB_REF_NAME#v}"
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+          import venv
+          from pathlib import Path
+
+          wheel, = Path("dist").resolve().glob("*.whl")
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          environment = os.environ.copy()
+          environment.pop("PYTHONPATH", None)
+
+          with tempfile.TemporaryDirectory(prefix="triadmux-wheel-") as directory:
+              workspace = Path(directory)
+              install = workspace / "venv"
+              venv.create(install, with_pip=True, symlinks=True)
+              python = install / "bin" / "python"
+              cli = install / "bin" / "triadmux"
+              subprocess.run(
+                  [python, "-m", "pip", "install", "--no-deps", wheel],
+                  cwd=workspace, env=environment, check=True,
+              )
+              subprocess.run(
+                  [python, "-m", "pip", "check"],
+                  cwd=workspace, env=environment, check=True,
+              )
+              installed_version = subprocess.check_output(
+                  [cli, "--version"], cwd=workspace, env=environment, text=True, timeout=10,
+              ).strip()
+              if installed_version != version:
+                  raise SystemExit(f"Expected version {version}, found {installed_version}")
+
+              task = "Verify the synthetic handoff"
+              command = [cli, "--state-dir", workspace / "state"]
+              run = json.loads(subprocess.check_output(
+                  [*command, "run", "--provider", "synthetic", task],
+                  cwd=workspace, env=environment, timeout=30,
+              ))
+              if (
+                  run["status"] != "completed"
+                  or run["stage"] != "synthesize"
+                  or task not in run["result"]
+                  or task not in run["worker_review"]["assignment"]
+                  or run["usage"]["provenance"] != "unknown"
+              ):
+                  raise SystemExit("The installed wheel did not complete the synthetic handoff")
+              saved = json.loads(subprocess.check_output(
+                  [*command, "status", run["run_id"]],
+                  cwd=workspace, env=environment, timeout=10,
+              ))
+              if saved != run:
+                  raise SystemExit("The saved run record differed from the CLI result")
+          PY
           (cd dist && sha256sum -- *.whl *.tar.gz > SHA256SUMS)
       - name: Publish verified artifacts
         env:
