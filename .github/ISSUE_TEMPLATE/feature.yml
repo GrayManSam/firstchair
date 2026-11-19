@@ -1,0 +1,17 @@
+name: Feature request
+description: Propose a TriadMux capability or improvement.
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Describe the workflow and what you need TriadMux to do.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Describe how a contributor can verify the change works.
+    validations:
+      required: true

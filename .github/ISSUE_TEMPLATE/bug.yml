@@ -1,0 +1,26 @@
+name: Bug report
+description: Report a TriadMux problem with a sanitized example.
+body:
+  - type: markdown
+    attributes:
+      value: For security issues, use the private reporting process in SECURITY.md.
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: TriadMux, Python, and OS versions, plus provider CLI versions if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and steps to reproduce
+      description: Use synthetic inputs and remove credentials, private paths, and private data.
+    validations:
+      required: true
