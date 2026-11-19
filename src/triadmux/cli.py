@@ -90,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
                         "stage_input_bytes": limits.input_bytes,
                         "total_timeout": provider.total_timeout,
                     }
+                    # Provider stages use a controller temp dir, not the repo cwd.
+                    result["workspace"] = "temporary"
             else:
                 result = run_workflow(args.task, args.state_dir, *stages)
         elif args.command == "recover":

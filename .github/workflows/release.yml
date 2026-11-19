@@ -25,29 +25,18 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.12'
-      - name: Verify the tag targets main
-        run: git merge-base --is-ancestor HEAD origin/main
+      - name: Require an annotated tag on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD FETCH_HEAD
+          test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
+          git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME" \
+            | grep -F "TriadMux ${GITHUB_REF_NAME#v}"
       - name: Check the tag against the package version
         id: tag
         run: |
-          python - <<'PY'
-          import os
-          import re
-          import tomllib
-          from pathlib import Path
-
-          tag = os.environ["GITHUB_REF_NAME"]
-          pattern = r"v(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:(a|b|rc)(?:0|[1-9][0-9]*))?"
-          match = re.fullmatch(pattern, tag)
-          if match is None:
-              raise SystemExit("Tag must use vX.Y.Z, with optional aN, bN, or rcN suffix")
-          package_version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
-          if package_version != tag[1:]:
-              raise SystemExit(f"Tag {tag} does not match package version {package_version}")
-          prerelease = str(match.group(1) is not None or tag == "v0.0.0").lower()
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-              output.write(f"prerelease={prerelease}\n")
-          PY
+          PYTHONPATH=src python -m triadmux.release_tag "$GITHUB_REF_NAME" \
+            --github-output "$GITHUB_OUTPUT"
 
   test:
     name: Verify release candidate
@@ -134,7 +123,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
-          flags=(--verify-tag --generate-notes)
+          PYTHONPATH=src python -m triadmux.release_tag "$GITHUB_REF_NAME" \
+            --notes release-notes.md
+          flags=(
+            --verify-tag
+            --title "TriadMux ${GITHUB_REF_NAME#v}"
+            --notes-file release-notes.md
+          )
           if [[ "$PRERELEASE" == true ]]; then
             flags+=(--prerelease)
           fi

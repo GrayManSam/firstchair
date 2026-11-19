@@ -1,0 +1,12 @@
+[plugins]
+enabled = ["triadmux"]
+
+[permission]
+ask = [
+  "Bash(python3 scripts/live-smoke.py*)",
+  "Bash(python scripts/live-smoke.py*)",
+]
+deny = [
+  "Read(.triadmux/**)",
+  "Edit(.triadmux/**)",
+]

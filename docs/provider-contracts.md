@@ -13,7 +13,15 @@ below are candidates for future adapters.
 For alpha, test supported event versions, terminal result detection, timeout
 and cancellation, authentication failure and unknown usage with fixtures.
 Treat provider output as data. Keep executable selection, working directory,
-permissions and budget in controller-owned policy.
+permissions and budget in controller-owned policy. Each current subprocess
+invocation uses a fresh `triadmux-workspace-*` directory and does not inherit
+the controller cwd. The child environment is an allowlist: interpreter and
+loader paths, locale, and `TRIADMUX_TEST_*`. API keys and `HOME` are not
+passed. Saved run records replace values of environment names containing
+`SECRET`, `TOKEN`, `PASSWORD`, `CREDENTIAL`, `API_KEY`, or `_KEY` when the
+value is at least 12 characters. The replacement text is `[redacted]`.
+POSIX timeout kills that process group. This check uses
+a synthetic process tree. It does not launch Codex, Claude Code, or Grok.
 
 ## Candidate result parsing
 
@@ -71,12 +79,26 @@ Before enabling an adapter, verify these fields against a sanitized
 
 The host evidence establishes newline-delimited JSON framing for
 `grok --no-auto-update -p TASK --output-format streaming-json`.
-The current smoke command uses `--output-format plain` for the final reply
-check. The streaming terminal event, usage fields and unattended tool
-denial behavior for 1.0.77 remain unverified. Leave the streaming parser
-disabled until there is version-specific evidence for those fields. [Headless
-output modes](https://docs.x.ai/build/cli/headless-scripting) ·
+The bundled 1.0.77 user guide describes each line as one JSON object with a
+string `type` and says the event-type list is non-exhaustive. It documents
+`text`, `usage`, and `end`. The offline validator checks type-tagged
+newline-delimited JSON and nothing else. It does not read a worker reply,
+usage counts, or a tool-denial outcome.
+
+TriadMux does not treat those guide fields as a worker result until a
+sanitized host capture confirms them. Unattended tool denial and sandbox
+scope stay unverified. The live adapter stays disabled. The current smoke
+command still uses `--output-format plain` for the final reply check.
+[Headless output modes](https://docs.x.ai/build/cli/headless-scripting) ·
 [Permissions](https://docs.x.ai/build/features/permissions)
+
+Invented framing example. This is not a host capture:
+
+```jsonl
+{"type":"probe","id":"fixture-0001","unused":true}
+{"type":"text","data":"Invented fragment"}
+{"type":"end","stopReason":"end_turn"}
+```
 
 For all candidates, reject unverified CLI versions before launching work.
 Provider-reported token counts can inform usage reporting. Record usage as

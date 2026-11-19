@@ -33,15 +33,35 @@ git diff --check
 
 ## First work order
 
-Review the Grok Build 1.0.77 contract gaps in `docs/provider-contracts.md`.
-The recorded host evidence confirms JSONL framing. A successful terminal
-reply, usage fields, and unattended tool-denial behavior still need
-version-specific evidence. Start with documentation and an invented offline
-fixture for fields the evidence actually confirms. Keep the adapter
-disabled while those gates are open. Any live smoke requires explicit
-maintainer opt-in and a credential-isolated environment.
+Framing validation for Grok Build 1.0.77 `streaming-json` is in tree.
+`validate_grok_jsonl` checks type-tagged newline-delimited JSON only. The
+next evidence still needed is a sanitized host capture of a terminal reply,
+usage, and unattended tool denial. Keep the adapter disabled while those
+gates are open. Any live smoke requires explicit maintainer opt-in and a
+credential-isolated environment.
+
+Grok project files live under `.grok/`: the `triadmux` agent, the
+`contract-reviewer` persona, and the `triadmux` plugin with the
+`provider-fixture` skill and `contract-reviewer` agent. `.grok/config.toml`
+enables that plugin and asks before `scripts/live-smoke.py`. Folder trust
+is required before Grok loads those project files.
+
+Provider subprocesses now use a controller temporary workspace, and a
+synthetic dry-run reports `"workspace": "temporary"`. POSIX timeout still
+kills the process group, including a grandchild. Live provider process
+trees are still unverified.
+
+Provider children receive an explicit environment allowlist. Saved run
+records replace secret environment values of at least 12 characters with
+`[redacted]`. Live adapters stay disabled.
+
+Public GitHub Releases use annotated tags of the form `v` plus the package
+version. `python -m triadmux.release_tag` checks the tag, version, and
+changelog before a tag is pushed. No tag has been created, and there is no
+Git remote yet.
 
 The other open gates are live workspace isolation and process-tree
 cleanup, hosted CI across the configured matrix, and the alpha release
-rehearsal. Keep transcripts, local state, account information, and credentials
-out of work products and Git.
+rehearsal. There is no Git remote yet, so hosted CI has not run. Keep
+transcripts, local state, account information, and credentials out of
+work products and Git.

@@ -8,7 +8,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from tempfile import TemporaryFile
+from tempfile import TemporaryDirectory, TemporaryFile
 from time import monotonic
 from typing import BinaryIO
 
@@ -57,50 +57,98 @@ async def _read_response(
         raise ProviderError(timeout_error) from None
 
 
+_SUBPROCESS_ENV_ALLOWLIST = frozenset({
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LANGUAGE",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONSAFEPATH",
+    "PYTHONIOENCODING",
+    "PYTHONUTF8",
+    "PYTHONNOUSERSITE",
+    "PYTHONLEGACYWINDOWSSTDIO",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "LIBPATH",
+})
+_SUBPROCESS_ENV_PREFIX = "TRIADMUX_TEST_"
+
+
+def _subprocess_environment() -> dict[str, str]:
+    # Pass an explicit allowlist so provider children do not inherit credentials.
+    # Relative PYTHONPATH entries follow cwd. Resolve them against the controller
+    # before the child starts in its workspace so imports stay the same.
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name in _SUBPROCESS_ENV_ALLOWLIST or name.startswith(_SUBPROCESS_ENV_PREFIX)
+    }
+    pythonpath = environment.get("PYTHONPATH")
+    if pythonpath is not None:
+        environment["PYTHONPATH"] = os.pathsep.join(
+            entry if entry == "" or os.path.isabs(entry) else os.path.abspath(entry)
+            for entry in pythonpath.split(os.pathsep)
+        )
+    return environment
+
+
 async def _run_process(
     argv: tuple[str, ...], request: BinaryIO, output_bytes: int, pass_fds: tuple[int, ...]
 ) -> bytes:
     use_process_group = os.name == "posix"
-    launch = asyncio.create_task(
-        asyncio.create_subprocess_exec(
-            *argv, stdin=request, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            start_new_session=use_process_group, pass_fds=pass_fds,
-        )
-    )
-    process = None
-    try:
-        process = await asyncio.shield(launch)
-        assert process.stdout is not None
+    # Remove the directory only after this function has waited on the child.
+    with TemporaryDirectory(prefix="triadmux-workspace-") as workspace:
+        spawn = {
+            "stdin": request,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.DEVNULL,
+            "cwd": workspace,
+            "start_new_session": use_process_group,
+            "pass_fds": pass_fds,
+            "env": _subprocess_environment(),
+        }
+        launch = asyncio.create_task(asyncio.create_subprocess_exec(*argv, **spawn))
+        process = None
         try:
-            await process.stdout.readexactly(output_bytes + 1)
-        except asyncio.IncompleteReadError as end:
-            # EOF alone is insufficient. A provider can close stdout before exiting.
-            if await process.wait():
-                raise ProviderError("provider_exit")
-            return end.partial
-        raise ProviderError("output_limit")
-    except BaseException as error:
-        if process is None:
-            if not isinstance(error, asyncio.CancelledError):
-                raise
-            # Let an in-flight launch hand back the process so it can be reaped.
+            process = await asyncio.shield(launch)
+            assert process.stdout is not None
             try:
-                process = await launch
-            except Exception:
-                raise error from None
-        assert process.stdout is not None
-        try:
-            if use_process_group:
-                # The leader may have exited while a child still holds stdout open.
-                os.killpg(process.pid, signal.SIGKILL)
-            elif process.returncode is None:
-                process.kill()
-        except ProcessLookupError:
-            pass
-        while await process.stdout.read(65536):
-            pass
-        await process.wait()
-        raise
+                await process.stdout.readexactly(output_bytes + 1)
+            except asyncio.IncompleteReadError as end:
+                # EOF alone is insufficient. A provider can close stdout before exiting.
+                if await process.wait():
+                    raise ProviderError("provider_exit")
+                return end.partial
+            raise ProviderError("output_limit")
+        except BaseException as error:
+            if process is None:
+                if not isinstance(error, asyncio.CancelledError):
+                    raise
+                # Let an in-flight launch hand back the process so it can be reaped.
+                try:
+                    process = await launch
+                except Exception:
+                    raise error from None
+            assert process.stdout is not None
+            try:
+                if use_process_group:
+                    # The leader may have exited while a child still holds stdout open.
+                    os.killpg(process.pid, signal.SIGKILL)
+                elif process.returncode is None:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+            while await process.stdout.read(65536):
+                pass
+            await process.wait()
+            raise
 
 
 def invoke(

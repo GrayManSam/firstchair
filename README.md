@@ -19,8 +19,11 @@ triadmux status <run-id>
 
 `doctor` locates Codex, Claude Code and Grok executables on PATH and reports
 each provider's readiness without launching it. The bundled synthetic provider
-is ready offline. Run records can contain your task and result. They live in
-the ignored `.triadmux/` directory by default. Use `triadmux --state-dir PATH`
+is ready offline. Run records can contain your task and result. Before a
+record is stored, secret environment values of at least 12 characters are
+replaced with `[redacted]`. Provider subprocesses receive an allowlisted
+environment and do not inherit API keys. Records live in the ignored
+`.triadmux/` directory by default. Use `triadmux --state-dir PATH`
 to select another location.
 
 The bundled synthetic subprocess adapter simulates a read-only handoff. Run
@@ -34,7 +37,9 @@ triadmux run --provider synthetic --timeout 5 --total-timeout 10 "Review the bui
 ```
 
 `--dry-run` explains provider selection and shows the stage limits without
-starting workers or creating a run record. `--max-input-bytes` applies to each
+starting workers or creating a run record. For `--provider synthetic` it
+also reports `"workspace": "temporary"`: each stage runs in a controller
+temporary directory. `--max-input-bytes` applies to each
 UTF-8 JSON request, including the envelope. Oversized requests fail with
 `input_limit` before worker startup. Each worker also has a stdout byte limit
 and a timeout. `--total-timeout` sets a shared budget across stages and reports
@@ -67,11 +72,19 @@ and version-specific contract verification.
 
 CI is configured for Ubuntu 24.04 with Python 3.12–3.14 and macOS with Python
 3.12. The release workflow installs the wheel on Ubuntu with Python 3.12
-and compares a completed synthetic workflow with its saved status.
+and compares a completed synthetic workflow with its saved status. A public
+release is an annotated tag named `v` plus the package version. The workflow
+publishes that changelog section and rejects every other tag.
 
 Run the tests with `PYTHONPATH=src python -m unittest discover -s tests -v`.
 See [the roadmap](ROADMAP.md) for alpha, beta and release gates and
 [the to-do list](TODO.md) for the next implementation slice.
+
+## Grok project files
+
+Grok discovers agents under `.grok/`, the `triadmux` plugin, and that
+plugin's `provider-fixture` skill. Those files stay in the repository for
+offline fixture and parser work. Live adapters stay disabled.
 
 TriadMux is independently maintained and released under the [MIT license](LICENSE).
 

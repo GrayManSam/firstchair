@@ -1,0 +1,5 @@
+{
+  "name": "triadmux",
+  "description": "Offline TriadMux provider-fixture skill and contract-review agent. No network, hooks, MCP, or LSP.",
+  "version": "0.0.0"
+}

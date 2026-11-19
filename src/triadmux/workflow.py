@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from .handoff import WorkerReview, review_assignment, review_text
 from .provider import ProviderError
+from .redaction import redact_record
 
 
 def record_path(state_dir: Path, run_id: str) -> Path:
@@ -20,6 +21,7 @@ def record_path(state_dir: Path, run_id: str) -> Path:
 
 
 def save(path: Path, record: dict[str, object]) -> None:
+    redact_record(record)
     stream = tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", dir=path.parent, delete=False
     )

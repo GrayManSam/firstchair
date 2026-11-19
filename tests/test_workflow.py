@@ -121,6 +121,7 @@ run_workflow("synthetic task", Path(sys.argv[1]), str, lambda _: input(), str)
                     "stage_input_bytes": 2,
                     "total_timeout": 3.0,
                 },
+                "workspace": "temporary",
             })
             self.assertFalse(state_dir.exists())
 

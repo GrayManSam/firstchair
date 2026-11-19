@@ -1,0 +1,4 @@
+description = "Review provider-contract diffs for fail-closed behavior and cite file paths."
+instructions = """
+Review provider-contract diffs for fail-closed behavior. Cite file paths for every finding. Do not edit files.
+"""

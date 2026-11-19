@@ -8,6 +8,7 @@
 - [x] Verify an installable package, version and help output, isolated tests and configuration defaults.
 - [x] Record upstream revision, license and reuse decision. Inventory repository-local instructions, skills and available integrations.
 - [ ] Run starter CI on GitHub and confirm release automation can build and verify distribution artifacts.
+- [x] Require annotated public tags named `v` plus the package version, with changelog notes, before a GitHub Release.
 - [ ] Confirm default-branch protection and release permissions, then mark the baseline release.
 
 - [x] Demonstrate an offline plan, review and synthesis handoff with persisted status.
@@ -22,10 +23,13 @@
 - [x] Recover abandoned synthetic run records after a controller crash on POSIX.
 - [x] List saved run IDs, stages, and statuses without printing task or result content.
 - [x] Verify bundled POSIX synthetic worker exit after controller SIGKILL.
+- [x] Run provider subprocesses in a temporary workspace and reap a POSIX grandchild on timeout.
+- [x] Keep provider children on an environment allowlist and redact secret values in saved run records.
 - [ ] Verify crash cleanup and workspace isolation for live provider process trees.
 - [x] Preview selected stages and execution limits without starting workers.
 - [ ] Add real provider adapters and complete credential-free CI fixtures before opt-in live smoke tests.
 - [x] Exercise offline Codex and Claude Code output parsing with synthetic fixtures.
+- [x] Validate Grok Build 1.0.77 streaming-json framing offline. Reply and usage acceptance stay disabled.
 - [x] Verify a structured synthetic Leader-to-worker review and synthesis with explicit run selection.
 - [x] Enforce a shared time budget across synthetic stages and test budget rejection.
 - [x] Enforce per-stage request byte budgets and expose synthetic limits through explicit TOML configuration.

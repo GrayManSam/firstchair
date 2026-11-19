@@ -49,22 +49,34 @@ creation to maintainers where repository permissions allow.
 ## Releasing
 
 Merge a pull request that updates `[project].version` in `pyproject.toml` and
-records the changes in the changelog. Wait for green CI on the target commit.
-Create and push a matching annotated tag from `main`. Use `v0.0.0` for the
-bootstrap milestone, `v0.1.0a1` for the first alpha, `v0.1.0b1` for beta,
-`v0.1.0rc1` for a release candidate, and `v0.1.0` for the first regular release.
+moves the changelog notes from `## Unreleased` to `## <version>`. Leave
+`## Unreleased` empty on the tagged commit. Wait for green CI on that commit.
+
+Public tags use one form: `v` plus the exact package version. The version is
+`X.Y.Z`, with `aN`, `bN`, or `rcN` for a prerelease. Examples are `v0.0.0`,
+`v0.1.0a1`, `v0.1.0b1`, `v0.1.0rc1`, `v0.1.0`, and `v1.0.0`. Do not use a
+lightweight tag, a `V` prefix, a hyphenated semver suffix, or a local version.
+
+Create an annotated tag from `main` and push that one ref. Do not move or
+delete a tag after it has been pushed. A corrected release gets a new version
+and a new tag.
 
 ```sh
 git switch main
 git pull --ff-only
+PYTHONPATH=src python -m triadmux.release_tag v0.1.0a1
 git tag -a v0.1.0a1 -m 'TriadMux 0.1.0a1'
 git push origin refs/tags/v0.1.0a1
 ```
 
-The workflow validates the version and commit, runs CI, and publishes the
-wheel, source distribution, and SHA-256 checksum file on GitHub Releases.
-Bootstrap, alpha, beta, and release candidate tags publish as prereleases.
+The tag message must contain `TriadMux` and the package version. The workflow
+rejects any other tag name, a lightweight tag, and a tag that is not on
+`main`. It runs CI, then publishes the wheel, source distribution, and SHA-256
+checksum file. The GitHub Release title is `TriadMux <version>` and the body
+is the changelog section for that version. `v0.0.0`, alpha, beta, and release
+candidate tags publish as prereleases. A stable `X.Y.Z` tag does not.
+
 Verify the release notes, assets, and checksums after publish. If the workflow
 fails before publication, inspect the failure and rerun the workflow for a
 transient error. For source defects, fix the issue on `main` and use a new tag
-for the corrected version.
+for the corrected version. Do not republish an existing tag.
