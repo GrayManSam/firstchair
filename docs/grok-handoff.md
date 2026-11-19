@@ -57,11 +57,13 @@ records replace secret environment values of at least 12 characters with
 
 Public GitHub Releases use annotated tags of the form `v` plus the package
 version. `python -m triadmux.release_tag` checks the tag, version, and
-changelog before a tag is pushed. No tag has been created, and there is no
-Git remote yet.
+changelog before a tag is pushed. No tag has been created.
 
 The other open gates are live workspace isolation and process-tree
 cleanup, hosted CI across the configured matrix, and the alpha release
-rehearsal. There is no Git remote yet, so hosted CI has not run. Keep
+rehearsal. `main` tracks the public repository
+https://github.com/GrayManSam/triadmux. The same history is on the private
+remote `private` at https://github.com/GrayManSam/triadmux-private. Hosted
+CI for that push has started and is not yet recorded as green. Keep
 transcripts, local state, account information, and credentials out of
 work products and Git.

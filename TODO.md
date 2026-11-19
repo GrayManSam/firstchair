@@ -4,7 +4,7 @@
 
 ## Foundation · 0.0.0
 
-- [ ] Create and verify the independent public repository, initial branch and upstream tracking.
+- [x] Create and verify the independent public repository, initial branch and upstream tracking.
 - [x] Verify an installable package, version and help output, isolated tests and configuration defaults.
 - [x] Record upstream revision, license and reuse decision. Inventory repository-local instructions, skills and available integrations.
 - [ ] Run starter CI on GitHub and confirm release automation can build and verify distribution artifacts.
