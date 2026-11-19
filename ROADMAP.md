@@ -5,9 +5,9 @@ TriadMux coordinates local coding CLIs through a Python controller. The first us
 | Stage | Git tag | Python version | Goal |
 | --- | --- | --- | --- |
 | Foundation | `v0.0.0` | `0.0.0` | Independent repository and a reproducible local development loop |
-| First alpha | `v0.1.0-alpha.1` | `0.1.0a1` | A complete, bounded Leader-to-worker workflow |
-| First beta | `v0.1.0-beta.1` | `0.1.0b1` | Validate recovery, portability and real provider compatibility |
-| Release candidate | `v0.1.0-rc.1` | `0.1.0rc1` | Freeze public interfaces and rehearse release and upgrade |
+| First alpha | `v0.1.0a1` | `0.1.0a1` | A complete, bounded Leader-to-worker workflow |
+| First beta | `v0.1.0b1` | `0.1.0b1` | Validate recovery, portability and real provider compatibility |
+| Release candidate | `v0.1.0rc1` | `0.1.0rc1` | Freeze public interfaces and rehearse release and upgrade |
 | First stable release | `v0.1.0` | `0.1.0` | Publish a documented, supported first release |
 | Compatibility commitment | `v1.0.0` | `1.0.0` | Commit to versioned CLI, configuration and adapter contracts |
 
