@@ -15,8 +15,9 @@
 ## MVP · 0.1.0a1
 
 - [ ] Document supported Codex, Claude Code and Grok Build command and event contracts using versioned sources and sanitized fixtures.
-- [ ] Build one offline vertical slice with a synthetic CLI, config validation, explicit provider selection, bounded execution and durable state.
-- [ ] Test malformed events and output limits, timeouts, cancellation, restart inspection and classified failures.
+- [x] Build one offline vertical slice with a synthetic CLI, config validation, explicit provider selection, bounded execution and durable state.
+- [x] Test malformed responses, output limits, stage timeouts, saved-state reads and classified failures.
+- [ ] Add process-tree cancellation and crash recovery tests before enabling live subprocesses.
 - [ ] Add real provider adapters and complete credential-free CI fixtures before opt-in live smoke tests.
 - [ ] Implement scoped, user-approved Leader-to-worker delegation and structured synthesis. Verify the complete path with synthetic workers.
 - [ ] Add enforceable task and execution budgets, usage provenance and routing explanations. Test unknown usage and budget rejection.

@@ -7,6 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from .provider import ProviderError
+
 Stage = Callable[[str], str]
 
 
@@ -49,8 +51,12 @@ def run_workflow(
         save(path, record)
         try:
             value = stage(value)
+        except ProviderError as error:
+            record.update(status="failed", error=str(error))
+            save(path, record)
+            return record
         except Exception:
-            record["status"] = "failed"
+            record.update(status="failed", error="stage_failed")
             save(path, record)
             return record
         except KeyboardInterrupt:

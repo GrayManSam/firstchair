@@ -23,6 +23,18 @@ your task and result. They live in the ignored `.triadmux/` directory by
 default. Use `triadmux --state-dir PATH` to select another location. An
 interrupted run remains inspectable. There is no automatic replay.
 
+The same handoff can run through the bundled synthetic subprocess adapter.
+Each stage has its own timeout and stdout limit. Status records include a
+failure code when the provider exits early, exceeds a limit, or returns an
+invalid response.
+
+```sh
+triadmux run --provider synthetic --timeout 5 --max-output-bytes 65536 "Review the build"
+```
+
+The adapter currently runs only the bundled synthetic worker. Live provider
+support will require workspace isolation and process-tree cleanup.
+
 Run the tests with `PYTHONPATH=src python -m unittest discover -s tests -v`.
 See [the roadmap](ROADMAP.md) for alpha, beta and release gates and
 [the to-do list](TODO.md) for the next implementation slice.
