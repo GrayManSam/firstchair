@@ -33,3 +33,13 @@ prompt and requested structured output. No provider returned a result.
 The local TriadMux CLI suite still passed, including both the in-process demo
 and synthetic subprocess workflow. A successful provider response remains
 necessary to verify authentication and collect a sanitized event fixture.
+
+Run the same fixed-prompt checks from a normal terminal with the existing
+provider logins:
+
+```sh
+python3 scripts/live-smoke.py
+```
+
+The checks run in temporary working directories and print only their
+outcomes. The command exits with status 1 if any check fails.
