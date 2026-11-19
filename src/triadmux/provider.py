@@ -3,6 +3,8 @@
 import asyncio
 import json
 import math
+import os
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -31,8 +33,10 @@ class ExecutionLimits:
 async def _read_response(
     argv: tuple[str, ...], request: BinaryIO, limits: ExecutionLimits
 ) -> bytes:
+    use_process_group = os.name == "posix"
     process = await asyncio.create_subprocess_exec(
-        *argv, stdin=request, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        *argv, stdin=request, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        start_new_session=use_process_group,
     )
     assert process.stdout is not None
     try:
@@ -45,15 +49,19 @@ async def _read_response(
                     raise ProviderError("provider_exit")
                 return end.partial
             raise ProviderError("output_limit")
-    finally:
-        if process.returncode is None:
-            try:
+    except BaseException:
+        try:
+            if use_process_group:
+                # The leader may have exited while a child still holds stdout open.
+                os.killpg(process.pid, signal.SIGKILL)
+            elif process.returncode is None:
                 process.kill()
-            except ProcessLookupError:
-                pass
-            while await process.stdout.read(65536):
-                pass
-            await process.wait()
+        except ProcessLookupError:
+            pass
+        while await process.stdout.read(65536):
+            pass
+        await process.wait()
+        raise
 
 
 def invoke(argv: tuple[str, ...], task: str, limits: ExecutionLimits) -> str:

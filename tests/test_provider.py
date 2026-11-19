@@ -1,8 +1,11 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from pathlib import Path
 
 from triadmux.provider import ExecutionLimits, ProviderError, invoke
 
@@ -60,3 +63,19 @@ class ProviderTests(unittest.TestCase):
                 timeout = 0.3 if code == "provider_timeout" else 5
                 with self.assertRaisesRegex(ProviderError, f"^{code}$"):
                     invoke((sys.executable, "-c", script), "task", ExecutionLimits(timeout))
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX process groups")
+    def test_timeout_stops_child_after_group_leader_exits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ready = Path(directory, "ready")
+            late = Path(directory, "late")
+            child = (
+                "from pathlib import Path; import time; "
+                f"Path({str(ready)!r}).touch(); time.sleep(1.2); Path({str(late)!r}).touch()"
+            )
+            leader = f"import subprocess, sys; subprocess.Popen([sys.executable, '-c', {child!r}])"
+            with self.assertRaisesRegex(ProviderError, "^provider_timeout$"):
+                invoke((sys.executable, "-c", leader), "task", ExecutionLimits(0.6))
+            self.assertTrue(ready.exists())
+            time.sleep(0.8)
+            self.assertFalse(late.exists())

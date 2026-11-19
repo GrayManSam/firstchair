@@ -42,4 +42,5 @@ python3 scripts/live-smoke.py
 ```
 
 The checks run in temporary working directories and print only their
-outcomes. The command exits with status 1 if any check fails.
+outcomes. It saves those same outcomes to `.triadmux/live-smoke.json` and
+exits with status 1 if any check fails. Use `--report PATH` to save elsewhere.

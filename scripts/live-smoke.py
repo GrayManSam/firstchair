@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Exercise installed, authenticated provider CLIs from the host terminal."""
 
+import argparse
 import json
 import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 MARKER = "TRIADMUX_SMOKE_OK"
 PROMPT = f"Reply with exactly {MARKER}. Do not use any tools."
@@ -88,10 +90,17 @@ def check(provider: str) -> tuple[str, bool]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--report", type=Path, default=Path(".triadmux/live-smoke.json"))
+    args = parser.parse_args()
     with ThreadPoolExecutor(max_workers=len(COMMANDS)) as pool:
         results = list(pool.map(check, COMMANDS))
+    report = {}
     for provider, (message, passed) in zip(COMMANDS, results, strict=True):
         print(f"{'PASS' if passed else 'FAIL'} {provider} - {message}")
+        report[provider] = {"passed": passed, "message": message}
+    args.report.parent.mkdir(parents=True, exist_ok=True)
+    args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return int(not all(passed for _, passed in results))
 
 
