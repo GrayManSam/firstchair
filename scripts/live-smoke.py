@@ -23,7 +23,7 @@ COMMANDS = {
         "--no-session-persistence", "--output-format", "json",
     ),
     "Grok Build": (
-        "grok", "--no-auto-update", "-p", PROMPT, "--output-format", "streaming-json",
+        "grok", "--no-auto-update", "-p", PROMPT, "--output-format", "plain",
     ),
 }
 
@@ -39,6 +39,8 @@ def contains_marker(value: object) -> bool:
 
 
 def has_reply(provider: str, output: str) -> bool:
+    if provider == "Grok Build":
+        return output.strip() == MARKER
     if provider == "Claude Code":
         reply = json.loads(output)
         return (
@@ -47,16 +49,14 @@ def has_reply(provider: str, output: str) -> bool:
             and contains_marker(reply.get("result"))
         )
     events = [json.loads(line) for line in output.splitlines() if line.strip()]
-    if provider == "Codex":
-        return any(
-            isinstance(event, dict)
-            and event.get("type") == "item.completed"
-            and isinstance(item := event.get("item"), dict)
-            and item.get("type") == "agent_message"
-            and contains_marker(item.get("text"))
-            for event in events
-        )
-    return any(contains_marker(event) for event in events)
+    return any(
+        isinstance(event, dict)
+        and event.get("type") == "item.completed"
+        and isinstance(item := event.get("item"), dict)
+        and item.get("type") == "agent_message"
+        and contains_marker(item.get("text"))
+        for event in events
+    )
 
 
 def check(provider: str) -> tuple[str, bool]:
@@ -83,7 +83,7 @@ def check(provider: str) -> tuple[str, bool]:
         return f"exited with code {result.returncode}", False
     try:
         if has_reply(provider, result.stdout):
-            return "received the expected structured reply", True
+            return "received the expected reply", True
     except (ValueError, RecursionError):
         return "invalid structured output", False
     return "expected reply missing", False
@@ -92,11 +92,13 @@ def check(provider: str) -> tuple[str, bool]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, default=Path(".triadmux/live-smoke.json"))
+    parser.add_argument("--provider", choices=COMMANDS, help="Run just one provider")
     args = parser.parse_args()
-    with ThreadPoolExecutor(max_workers=len(COMMANDS)) as pool:
-        results = list(pool.map(check, COMMANDS))
+    providers = (args.provider,) if args.provider else tuple(COMMANDS)
+    with ThreadPoolExecutor(max_workers=len(providers)) as pool:
+        results = list(pool.map(check, providers))
     report = {}
-    for provider, (message, passed) in zip(COMMANDS, results, strict=True):
+    for provider, (message, passed) in zip(providers, results, strict=True):
         print(f"{'PASS' if passed else 'FAIL'} {provider} - {message}")
         report[provider] = {"passed": passed, "message": message}
     args.report.parent.mkdir(parents=True, exist_ok=True)

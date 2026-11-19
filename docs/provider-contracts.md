@@ -44,3 +44,16 @@ python3 scripts/live-smoke.py
 The checks run in temporary working directories and print only their
 outcomes. It saves those same outcomes to `.triadmux/live-smoke.json` and
 exits with status 1 if any check fails. Use `--report PATH` to save elsewhere.
+
+## Host-terminal results
+
+Codex and Claude Code both returned the expected structured reply using
+the existing host logins. Grok Build exited successfully and produced
+parseable JSONL, but the smoke test did not find the marker as a single
+value. This leaves the Grok model reply unverified. The smoke runner now
+uses [Grok's plain output mode](https://docs.x.ai/build/cli/headless-scripting)
+to check the final text separately from its streaming contract.
+
+```sh
+python3 scripts/live-smoke.py --provider "Grok Build" --report .triadmux/grok-smoke.json
+```
