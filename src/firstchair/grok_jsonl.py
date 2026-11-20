@@ -65,12 +65,19 @@ def parse_grok_jsonl(output: bytes, *, version: str, returncode: int) -> Reply:
 
     fragments: list[str] = []
     usage_event = {}
+    turn_break = False
     for event in events:
         if event["type"] == "text":
             fragment = event.get("data")
             if not isinstance(fragment, str):
                 raise ProviderError("malformed_response")
+            if turn_break and fragments:
+                # Text from separate model turns, split by a tool call, is a new paragraph.
+                fragments.append("\n\n")
+            turn_break = False
             fragments.append(fragment)
+        elif event["type"] in ("tool_call", "tool_call_update"):
+            turn_break = True
         elif event["type"] == "usage":
             usage_event = event
     text = "".join(fragments)

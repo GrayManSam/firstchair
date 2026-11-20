@@ -125,3 +125,17 @@ class GrokReplyTests(unittest.TestCase):
     def test_rejects_blank_lines(self):
         with self.assertRaisesRegex(ProviderError, "^malformed_response$"):
             parse_grok_jsonl(response(TEXT) + b"\n" + response(END), version="1.0.77", returncode=0)
+
+
+class GrokTurnBreakTests(unittest.TestCase):
+    def test_text_split_by_a_tool_call_becomes_separate_paragraphs(self):
+        output = response(
+            {"type": "text", "data": "Reading the file."},
+            {"type": "tool_call", "toolCallId": "call-0001", "toolName": "read_file"},
+            {"type": "tool_call_update", "toolCallId": "call-0001", "status": "completed"},
+            {"type": "text", "data": "The plan "},
+            {"type": "text", "data": "is sound."},
+            {"type": "end", "stopReason": "end_turn"},
+        )
+        reply = parse_grok_jsonl(output, version="1.0.77", returncode=0)
+        self.assertEqual(reply.text, "Reading the file.\n\nThe plan is sound.")
