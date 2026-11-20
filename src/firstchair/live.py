@@ -15,13 +15,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from time import monotonic
+from typing import BinaryIO
 from typing import Any
 
-from .accounts import CREDENTIAL_OVERRIDES, HOME_VARIABLE, account_environment
+from .accounts import CREDENTIAL_OVERRIDES, HOME_VARIABLE, account_environment, profile_home
 from .claude_json import parse_claude_json
 from .codex_jsonl import parse_codex_jsonl
 from .grok_jsonl import parse_grok_jsonl
 from .provider import ProviderError, _subprocess_environment, run_bounded
+from .redaction import _is_secret_name
 from .usage import Reply, Usage
 from .versions import check_version, read_version
 
@@ -62,7 +64,11 @@ def live_environment(provider: str, profile: str | None = None) -> dict[str, str
     API keys never pass through, so each CLI uses its native sign-in.
     """
     source = account_environment(provider, profile) if profile is not None else dict(os.environ)
-    environment = _subprocess_environment()
+    # Test-prefixed names pass for fake CLIs, but never a secret-looking one.
+    environment = {
+        name: value for name, value in _subprocess_environment().items()
+        if not _is_secret_name(name)
+    }
     for name in (*_LIVE_ENV_NAMES, HOME_VARIABLE[provider]):
         if name in source and name not in CREDENTIAL_OVERRIDES:
             environment[name] = source[name]
@@ -70,24 +76,31 @@ def live_environment(provider: str, profile: str | None = None) -> dict[str, str
     return environment
 
 
-def provider_version(provider: str, env: dict[str, str] | None = None) -> str:
-    """Run `PROVIDER --version` with a short deadline and return X.Y.Z."""
-    executable = shutil.which(provider)
+def find_executable(provider: str, env: dict[str, str]) -> str:
+    """Resolve the CLI once to an absolute path, so probe and stages run the same file."""
+    executable = shutil.which(provider, path=env.get("PATH"))
     if executable is None:
         raise ProviderError("provider_unavailable")
-    argv = [executable, "--version"] if provider != "grok" else [executable, "--no-auto-update", "--version"]
+    return os.path.abspath(executable)
+
+
+def provider_version(provider: str, env: dict[str, str] | None = None, executable: str | None = None) -> str:
+    """Run `PROVIDER --version` with bounded output and deadline, and return X.Y.Z."""
+    env = env if env is not None else live_environment(provider)
+    executable = executable or find_executable(provider, env)
+    argv = (executable, "--version") if provider != "grok" else (executable, "--no-auto-update", "--version")
     try:
         with TemporaryDirectory(prefix="firstchair-version-") as cwd:
-            result = subprocess.run(
-                argv, cwd=cwd, env=env if env is not None else live_environment(provider),
-                stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                errors="replace", timeout=20,
-            )
-    except (OSError, subprocess.TimeoutExpired):
+            returncode, output = asyncio.run(_bounded(
+                argv, subprocess.DEVNULL, 64 * 1024, cwd, env, 20, "provider_unavailable",
+            ))
+    except OSError:
         raise ProviderError("provider_unavailable") from None
-    if result.returncode:
+    except ProviderError:
+        raise ProviderError("provider_unavailable") from None
+    if returncode:
         raise ProviderError("provider_unavailable")
-    return read_version(provider, result.stdout)
+    return read_version(provider, output.decode("utf-8", errors="replace"))
 
 
 def readiness(provider: str) -> dict[str, object]:
@@ -149,10 +162,13 @@ class LiveProvider:
     profile: str | None = None
     deadline: float | None = None
     version: str | None = None
+    executable: str | None = None
 
     def __post_init__(self) -> None:
         if self.provider not in PROVIDERS:
             raise ValueError(f"unknown live provider {self.provider}")
+        if self.profile is not None:
+            profile_home(self.provider, self.profile)  # Reject unknown or unsafe profiles early.
         if self.workspace is not None:
             self.workspace = self.workspace.resolve()
             if not self.workspace.is_dir():
@@ -162,9 +178,10 @@ class LiveProvider:
         """Check the installed version once before any stage runs."""
         if self.version is None:
             env = live_environment(self.provider, self.profile)
-            version = provider_version(self.provider, env)
+            executable = find_executable(self.provider, env)
+            version = provider_version(self.provider, env, executable)
             check_version(self.provider, version)
-            self.version = version
+            self.executable, self.version = executable, version
         return self.version
 
     def ask(self, prompt: str) -> Reply:
@@ -186,10 +203,7 @@ class LiveProvider:
                 prompt_file = Path(scratch) / "prompt.txt"
                 prompt_file.write_bytes(payload)
                 argv, use_stdin = build_command(self.provider, self.workspace, prompt_file)
-                executable = shutil.which(argv[0], path=env.get("PATH"))
-                if executable is None:
-                    raise ProviderError("provider_unavailable")
-                argv = (executable, *argv[1:])
+                argv = (self.executable or find_executable(self.provider, env), *argv[1:])
                 cwd = str(self.workspace) if self.workspace is not None else scratch
                 with TemporaryFile() as request:
                     if use_stdin:
@@ -204,7 +218,7 @@ class LiveProvider:
 
 
 async def _bounded(
-    argv: tuple[str, ...], request, output_bytes: int, cwd: str,
+    argv: tuple[str, ...], request: BinaryIO | int, output_bytes: int, cwd: str,
     env: dict[str, str], timeout: float, timeout_error: str,
 ) -> tuple[int, bytes]:
     try:
@@ -260,6 +274,7 @@ class LiveSession:
     task: str = ""
     plan_text: str = ""
     stages: dict[str, dict[str, object]] = field(default_factory=dict)
+    attempted: int = 0
 
     def _record(self, stage: str, provider: LiveProvider, reply: Reply) -> str:
         self.stages[stage] = {
@@ -271,30 +286,33 @@ class LiveSession:
         return reply.text
 
     def plan(self, task: str) -> str:
+        self.attempted += 1
         self.task = task
         self.plan_text = self._record("plan", self.lead, self.lead.ask(PLAN_PROMPT.format(task=task)))
         return self.plan_text
 
     def review(self, plan: str) -> str:
+        self.attempted += 1
         prompt = REVIEW_PROMPT.format(task=self.task, plan=plan)
         return self._record("review", self.reviewer, self.reviewer.ask(prompt))
 
     def synthesize(self, review: str) -> str:
+        self.attempted += 1
         prompt = SYNTHESIS_PROMPT.format(task=self.task, plan=self.plan_text, review=review)
         return self._record("synthesize", self.lead, self.lead.ask(prompt))
 
     def details(self) -> dict[str, object]:
-        return {"stages": self.stages, "usage": total_usage(self.stages)}
+        return {"stages": self.stages, "usage": total_usage(self.stages, self.attempted)}
 
 
-def total_usage(stages: dict[str, dict[str, object]]) -> dict[str, object]:
-    """Sum measured counts. Mark the total partial when any stage is unknown."""
+def total_usage(stages: dict[str, dict[str, object]], attempted: int | None = None) -> dict[str, object]:
+    """Sum measured counts. Mark the total partial when any attempted stage lacks counts."""
     usages: list[dict[str, Any]] = [stage["usage"] for stage in stages.values()]  # type: ignore[misc]
     measured = [usage for usage in usages if usage["provenance"] == "measured"]
     if not measured:
         return Usage().as_record()
     return {
-        "provenance": "measured" if len(measured) == len(usages) else "partial",
+        "provenance": "measured" if len(measured) == max(len(usages), attempted or 0) else "partial",
         "input_tokens": sum(usage["input_tokens"] for usage in measured),
         "output_tokens": sum(usage["output_tokens"] for usage in measured),
     }
