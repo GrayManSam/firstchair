@@ -88,17 +88,19 @@ def recover_workflow(state_dir: Path, run_id: str) -> dict[str, object]:
 def run_workflow[Review: (str, WorkerReview)](
     task: str, state_dir: Path,
     plan: Callable[[str], str], review: Callable[[str], Review], synthesize: Callable[[Review], str],
+    *, details: Callable[[], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     run_id = str(uuid4())
     path = record_path(state_dir, run_id)
     with _run_lock(path, create=True):
-        return _run_stages(path, run_id, task, plan, review, synthesize)
+        return _run_stages(path, run_id, task, plan, review, synthesize, details)
 
 
 def _run_stages[Review: (str, WorkerReview)](
     path: Path, run_id: str, task: str,
     plan: Callable[[str], str], review: Callable[[str], Review], synthesize: Callable[[Review], str],
+    details: Callable[[], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     record: dict[str, object] = {
         "schema_version": 1,
@@ -112,6 +114,14 @@ def _run_stages[Review: (str, WorkerReview)](
         },
     }
     save(path, record)
+
+    def checkpoint(**fields: object) -> None:
+        # Stage outputs and usage are recorded even when a later stage fails.
+        if details is not None:
+            record.update(details())
+        record.update(fields)
+        save(path, record)
+
     value: str | WorkerReview = task
     worker_review = None
     for name, stage in (("plan", plan), ("review", review), ("synthesize", synthesize)):
@@ -120,23 +130,21 @@ def _run_stages[Review: (str, WorkerReview)](
         try:
             value = stage(value)
         except ProviderError as error:
-            record.update(status="failed", error=str(error))
-            save(path, record)
+            checkpoint(status="failed", error=str(error))
             return record
         except Exception:
-            record.update(status="failed", error="stage_failed")
-            save(path, record)
+            checkpoint(status="failed", error="stage_failed")
             return record
         except KeyboardInterrupt:
-            record["status"] = "interrupted"
-            save(path, record)
+            checkpoint(status="interrupted")
             return record
+        if details is not None:
+            checkpoint()
         if name == "review" and isinstance(value, dict):
             worker_review = value
-    record.update(status="completed", result=value)
     if worker_review is not None:
         record["worker_review"] = worker_review
-    save(path, record)
+    checkpoint(status="completed", result=value)
     return record
 
 

@@ -103,53 +103,76 @@ def _subprocess_environment() -> dict[str, str]:
 async def _run_process(
     argv: tuple[str, ...], request: BinaryIO, output_bytes: int, pass_fds: tuple[int, ...]
 ) -> bytes:
-    use_process_group = os.name == "posix"
-    # Remove the directory only after this function has waited on the child.
+    # Remove the directory only after the child has been waited on.
     with TemporaryDirectory(prefix="firstchair-workspace-") as workspace:
-        spawn = {
-            "stdin": request,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.DEVNULL,
-            "cwd": workspace,
-            "start_new_session": use_process_group,
-            "pass_fds": pass_fds,
-            "env": _subprocess_environment(),
-        }
-        launch = asyncio.create_task(asyncio.create_subprocess_exec(*argv, **spawn))
-        process = None
+        returncode, output = await run_bounded(
+            argv, request, output_bytes,
+            cwd=workspace, env=_subprocess_environment(), pass_fds=pass_fds,
+        )
+    if returncode:
+        raise ProviderError("provider_exit")
+    return output
+
+
+async def run_bounded(
+    argv: tuple[str, ...], request: BinaryIO | int, output_bytes: int, *,
+    cwd: str, env: dict[str, str], pass_fds: tuple[int, ...] = (),
+) -> tuple[int, bytes]:
+    """Run one process with bounded stdout and return its exit code and output.
+
+    On error, timeout or cancellation the whole POSIX process group is killed
+    and reaped before the exception propagates.
+    """
+    use_process_group = os.name == "posix"
+    spawn = {
+        "stdin": request,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.DEVNULL,
+        "cwd": cwd,
+        "start_new_session": use_process_group,
+        "pass_fds": pass_fds,
+        "env": env,
+    }
+    launch = asyncio.create_task(asyncio.create_subprocess_exec(*argv, **spawn))
+    process = None
+    try:
+        process = await asyncio.shield(launch)
+        assert process.stdout is not None
         try:
-            process = await asyncio.shield(launch)
-            assert process.stdout is not None
-            try:
-                await process.stdout.readexactly(output_bytes + 1)
-            except asyncio.IncompleteReadError as end:
-                # EOF alone is insufficient. A provider can close stdout before exiting.
-                if await process.wait():
-                    raise ProviderError("provider_exit")
-                return end.partial
-            raise ProviderError("output_limit")
-        except BaseException as error:
-            if process is None:
-                if not isinstance(error, asyncio.CancelledError):
-                    raise
-                # Let an in-flight launch hand back the process so it can be reaped.
+            await process.stdout.readexactly(output_bytes + 1)
+        except asyncio.IncompleteReadError as end:
+            # EOF alone is insufficient. A provider can close stdout before exiting.
+            returncode = await process.wait()
+            if use_process_group:
+                # Reap helpers the provider left behind in its group.
                 try:
-                    process = await launch
-                except Exception:
-                    raise error from None
-            assert process.stdout is not None
-            try:
-                if use_process_group:
-                    # The leader may have exited while a child still holds stdout open.
                     os.killpg(process.pid, signal.SIGKILL)
-                elif process.returncode is None:
-                    process.kill()
-            except ProcessLookupError:
-                pass
-            while await process.stdout.read(65536):
-                pass
-            await process.wait()
-            raise
+                except (ProcessLookupError, PermissionError):
+                    pass
+            return returncode, end.partial
+        raise ProviderError("output_limit")
+    except BaseException as error:
+        if process is None:
+            if not isinstance(error, asyncio.CancelledError):
+                raise
+            # Let an in-flight launch hand back the process so it can be reaped.
+            try:
+                process = await launch
+            except Exception:
+                raise error from None
+        assert process.stdout is not None
+        try:
+            if use_process_group:
+                # The leader may have exited while a child still holds stdout open.
+                os.killpg(process.pid, signal.SIGKILL)
+            elif process.returncode is None:
+                process.kill()
+        except ProcessLookupError:
+            pass
+        while await process.stdout.read(65536):
+            pass
+        await process.wait()
+        raise
 
 
 def invoke(

@@ -28,6 +28,8 @@ _EXACT_ALLOWLIST = frozenset({
     "LIBPATH",
 })
 _TEST_PREFIXES = ("FIRSTCHAIR_TEST_", "TRIADMUX_TEST_")
+# macOS adds these to every child process after the controller builds its env.
+_OS_INJECTED = ("__CF_USER_TEXT_ENCODING", "__PYVENV_LAUNCHER__")
 
 
 def _allowed(name: str) -> bool:
@@ -67,7 +69,8 @@ print(json.dumps({
         result = invoke((sys.executable, "-c", script), "task", ExecutionLimits())
         keys = set(result.split(","))
         self.assertTrue(keys)
-        self.assertTrue(all(_allowed(name) for name in keys))
+        unexpected = sorted(name for name in keys if not _allowed(name) and name not in _OS_INJECTED)
+        self.assertEqual(unexpected, [])
         self.assertIn("FIRSTCHAIR_TEST_MARKER", keys)
         self.assertIn("FIRSTCHAIR_TEST_WORKER_LOCK", keys)
         for name in _SECRET_NAMES:

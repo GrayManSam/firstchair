@@ -15,7 +15,7 @@
 
 ## MVP · 0.1.0a1
 
-- [ ] Document supported Codex, Claude Code and Grok Build command and event contracts using versioned sources and sanitized fixtures.
+- [x] Document supported Codex, Claude Code and Grok Build command and event contracts using versioned sources and sanitized fixtures.
 - [x] Build one offline vertical slice with a synthetic CLI, config validation, explicit provider selection, bounded execution and durable state.
 - [x] Test malformed responses, output limits, stage timeouts, saved-state reads and classified failures.
 - [x] Clean up POSIX workers and their process group on stage failure or timeout.
@@ -25,9 +25,10 @@
 - [x] Verify bundled POSIX synthetic worker exit after controller SIGKILL.
 - [x] Run provider subprocesses in a temporary workspace and reap a POSIX grandchild on timeout.
 - [x] Keep provider children on an environment allowlist and redact secret values in saved run records.
-- [ ] Verify crash cleanup and workspace isolation for live provider process trees.
+- [x] Kill live provider process groups on timeout and interruption, and run them read-only in a temporary or chosen workspace.
+- [ ] Verify a successful Claude Code 2.1.329 headless reply on an account with headless allowance.
 - [x] Preview selected stages and execution limits without starting workers.
-- [ ] Add real provider adapters and complete credential-free CI fixtures before opt-in live smoke tests.
+- [x] Add read-only live adapters for Codex, Claude Code and Grok Build with version gates, fake-CLI tests and a recorded host run.
 - [x] Exercise offline Codex and Claude Code output parsing with synthetic fixtures.
 - [x] Validate Grok Build 1.0.77 streaming-json framing offline. Reply and usage acceptance stay disabled.
 - [x] Verify a structured synthetic Leader-to-worker review and synthesis with explicit run selection.

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.1.0a1
+
+- Added read-only live adapters for Codex CLI, Claude Code and Grok Build.
+  `firstchair run --provider codex|claude|grok` runs plan, review and
+  synthesis with your existing sign-in. `--reviewer` picks a different model
+  for the review, `--workspace` lets providers read a directory, and
+  `--format text` prints a readable summary. Each run records stage outputs
+  and measured token usage where the provider reports it.
+- Live providers run without write tools or MCP servers, never receive API key
+  variables, and are killed with their process group on timeout or Ctrl-C.
+- Accept verified provider versions and a bounded compatible range. Unknown
+  versions are rejected before any run starts. `firstchair doctor` reports
+  each provider's version and contract status.
+- Claude Code rate-limit and authorization failures are reported as
+  `rate_limited` and `authorization_failed`.
+- Added `firstchair delegate` for dispatching Codex and Grok Build workers
+  into Git worktrees, and `firstchair auth` for named provider sign-ins.
 - Renamed the project from TriadMux to Firstchair. The distribution, import
   package and command are now `firstchair`, and the default state directory
   is `.firstchair/`. For one release, a `triadmux` command prints a notice

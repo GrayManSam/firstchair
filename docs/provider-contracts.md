@@ -1,5 +1,42 @@
 # Provider contract inventory
 
+## Live read-only adapters (0.1.0a1)
+
+`firstchair run --provider codex|claude|grok` uses the commands below. The
+controller checks `--version` first and accepts only a verified version or
+one inside the compatible range in `src/firstchair/versions.py`.
+
+| Provider | Verified | Command | Prompt |
+| --- | --- | --- | --- |
+| Codex CLI | 0.170.0, 0.171.0 | `codex --ask-for-approval never exec --ephemeral --sandbox read-only --skip-git-repo-check --color never --config mcp_servers={} --json -` | stdin |
+| Claude Code | 2.1.328, 2.1.329 | `claude -p --output-format json --no-session-persistence --setting-sources "" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --tools TOOLS --permission-mode dontAsk` | stdin |
+| Grok Build | 1.0.77 | `grok --no-auto-update --prompt-file FILE --output-format streaming-json --no-subagents --disable-web-search --sandbox workspace --permission-mode dontAsk --tools TOOLS --deny mcp__* --deny Edit --deny Write --deny Bash --deny WebFetch` | file |
+
+`TOOLS` is empty without `--workspace`. With a workspace it is
+`Read,Grep,Glob` for Claude Code and `read_file,list_dir,grep` for Grok
+Build. The working directory is the workspace, or an empty temporary
+directory. The child environment is the controller allowlist plus `HOME`,
+`USER`, XDG directories, proxy and CA variables and the provider's own home
+variable (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`). Credential
+variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `XAI_API_KEY`
+are removed.
+
+Host findings on 2026-11-20 (Fedora 43):
+
+- Grok Build `--tools ""` still offers `run_terminal_command`, and `--tools`
+  never removes MCP tools. A user's configured MCP servers, including ones
+  with write actions, stay callable unless denied. The adapter therefore
+  combines `--permission-mode dontAsk` with explicit `--deny` rules.
+- Grok Build streaming-json emits `available_commands`, a series of `text`
+  fragments, `usage`, and a final `end` with `stopReason: end_turn` and a
+  `usage` object. The reply is the concatenated `text` data.
+- Codex CLI 0.171.0 emits the same event sequence as 0.170.0.
+- Claude Code 2.1.329 on an account without headless allowance exits 1 with
+  a result envelope where `is_error` is true and `api_error_status` is 429.
+  Firstchair reports `rate_limited`. A successful 2.1.329 reply on this host
+  is still unverified, so the Claude success path relies on the documented
+  envelope.
+
 The following versions were present during local discovery. The workflow
 currently accepts the bundled synthetic provider. The live-provider commands
 below are candidates for future adapters.
