@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.1.0a2
+
+Fixes from the post-release review of the live adapters.
+
+- Secret-looking variables, including test-prefixed ones, no longer reach
+  live provider processes.
+- Each provider executable is resolved once to an absolute path, so the
+  version probe and every stage run the same file even with a relative
+  `PATH` entry.
+- The `--version` probe now has bounded output and process-group cleanup.
+- Cleanup after a timeout or Ctrl-C no longer waits indefinitely on a
+  descendant that left the process group but still holds stdout.
+- A run whose failed stage reported no token counts now shows `partial`
+  usage instead of `measured`.
+- `--profile` and `--reviewer-profile` are validated before a dry run
+  reports readiness.
+
 ## 0.1.0a1
 
 - Added read-only live adapters for Codex CLI, Claude Code and Grok Build.

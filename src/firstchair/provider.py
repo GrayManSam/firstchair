@@ -15,6 +15,7 @@ from typing import BinaryIO
 from .handoff import WorkerReview, read_review
 
 MAX_TASK_BYTES = 64 * 1024
+DRAIN_SECONDS = 5.0
 
 
 class ProviderError(Exception):
@@ -169,7 +170,13 @@ async def run_bounded(
                 process.kill()
         except ProcessLookupError:
             pass
-        while await process.stdout.read(65536):
+        try:
+            # A descendant that left the process group can hold stdout open.
+            # Stop draining after a grace period rather than waiting on it.
+            async with asyncio.timeout(DRAIN_SECONDS):
+                while await process.stdout.read(65536):
+                    pass
+        except TimeoutError:
             pass
         await process.wait()
         raise
