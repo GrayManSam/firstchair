@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from uuid import uuid4
 
-from triadmux.workflow import record_path, recover_workflow, run_workflow, save
+from firstchair.workflow import record_path, recover_workflow, run_workflow, save
 
 
 class WorkflowTests(unittest.TestCase):
@@ -18,12 +18,12 @@ class WorkflowTests(unittest.TestCase):
 import sys
 from pathlib import Path
 
-from triadmux.workflow import run_workflow
+from firstchair.workflow import run_workflow
 
 run_workflow("synthetic task", Path(sys.argv[1]), str, lambda _: input(), str)
 """
         with tempfile.TemporaryDirectory() as directory:
-            command = [sys.executable, "-m", "triadmux", "--state-dir", directory]
+            command = [sys.executable, "-m", "firstchair", "--state-dir", directory]
             with subprocess.Popen(
                 [sys.executable, "-c", script, directory], stdin=subprocess.PIPE
             ) as controller:
@@ -96,7 +96,7 @@ run_workflow("synthetic task", Path(sys.argv[1]), str, lambda _: input(), str)
     def test_dry_run_reports_limits_without_executing_or_creating_state(self):
         with tempfile.TemporaryDirectory() as directory:
             state_dir = Path(directory, "state")
-            command = [sys.executable, "-m", "triadmux", "--state-dir", str(state_dir)]
+            command = [sys.executable, "-m", "firstchair", "--state-dir", str(state_dir)]
             output = subprocess.check_output(
                 [*command, "run", "--provider", "synthetic", "--dry-run", "--timeout", "2",
                  "--total-timeout", "3", "--max-output-bytes", "1", "--max-input-bytes", "2",
@@ -127,7 +127,7 @@ run_workflow("synthetic task", Path(sys.argv[1]), str, lambda _: input(), str)
 
     def test_cli_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
-            command = [sys.executable, "-m", "triadmux", "--state-dir", directory]
+            command = [sys.executable, "-m", "firstchair", "--state-dir", directory]
             output = subprocess.check_output(
                 [*command, "run", "--demo", "Review the project README"], text=True
             )

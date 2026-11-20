@@ -16,7 +16,7 @@ class ConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
             command = [
-                sys.executable, "-m", "triadmux", "--state-dir", str(root / "state"),
+                sys.executable, "-m", "firstchair", "--state-dir", str(root / "state"),
                 "run", "--provider", "synthetic", "--config", str(config),
             ]
             plan = subprocess.check_output(
@@ -51,7 +51,7 @@ class ConfigTests(unittest.TestCase):
                 with self.subTest(content=content):
                     config.write_text(content, encoding="utf-8")
                     command = [
-                        sys.executable, "-m", "triadmux", "--state-dir", str(state), "run",
+                        sys.executable, "-m", "firstchair", "--state-dir", str(state), "run",
                         "--provider", "synthetic", "--config", str(config), "Review the README",
                     ]
                     rejected = subprocess.run(command, capture_output=True, text=True, timeout=10)

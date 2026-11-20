@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from triadmux.workflow import demo_plan, record_path, run_workflow
+from firstchair.workflow import demo_plan, record_path, run_workflow
 
 
 def _contains(secret: str, value: object) -> bool:

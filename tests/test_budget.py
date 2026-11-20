@@ -8,8 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from triadmux.provider import ExecutionLimits, ProviderError, SyntheticProvider, invoke
-from triadmux.workflow import record_path, run_workflow
+from firstchair.provider import ExecutionLimits, ProviderError, SyntheticProvider, invoke
+from firstchair.workflow import record_path, run_workflow
 
 
 class ExecutionBudgetTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class ExecutionBudgetTests(unittest.TestCase):
 
     def test_later_stage_request_uses_same_input_limit(self):
         with tempfile.TemporaryDirectory() as directory:
-            command = [sys.executable, "-m", "triadmux", "--state-dir", directory]
+            command = [sys.executable, "-m", "firstchair", "--state-dir", directory]
             failed = subprocess.run(
                 [*command, "run", "--provider", "synthetic", "--max-input-bytes", "40", "x"],
                 capture_output=True, text=True, timeout=10,
@@ -56,7 +56,7 @@ class ExecutionBudgetTests(unittest.TestCase):
         stages = ("plan", "review", "synthesize")
         with (
             tempfile.TemporaryDirectory() as directory,
-            patch("triadmux.provider.monotonic", side_effect=[100, 100, 100.1, 102]),
+            patch("firstchair.provider.monotonic", side_effect=[100, 100, 100.1, 102]),
             patch("asyncio.create_subprocess_exec", wraps=asyncio.create_subprocess_exec) as spawn,
         ):
             provider = SyntheticProvider(ExecutionLimits(), total_timeout=2)
@@ -80,7 +80,7 @@ class ExecutionBudgetTests(unittest.TestCase):
         for limits, remaining, error_code in cases:
             with (
                 self.subTest(error_code=error_code),
-                patch("triadmux.provider.monotonic", return_value=100),
+                patch("firstchair.provider.monotonic", return_value=100),
                 self.assertRaisesRegex(ProviderError, f"^{error_code}$"),
             ):
                 invoke(argv, "sample task", limits, deadline=100 + remaining)

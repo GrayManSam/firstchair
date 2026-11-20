@@ -2,7 +2,7 @@ import os
 import sys
 import unittest
 
-from triadmux.provider import ExecutionLimits, invoke
+from firstchair.provider import ExecutionLimits, invoke
 
 
 _SECRET_NAMES = ("XAI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "HOME")
@@ -27,11 +27,11 @@ _EXACT_ALLOWLIST = frozenset({
     "DYLD_LIBRARY_PATH",
     "LIBPATH",
 })
-_TEST_PREFIX = "TRIADMUX_TEST_"
+_TEST_PREFIXES = ("FIRSTCHAIR_TEST_", "TRIADMUX_TEST_")
 
 
 def _allowed(name: str) -> bool:
-    return name in _EXACT_ALLOWLIST or name.startswith(_TEST_PREFIX)
+    return name in _EXACT_ALLOWLIST or name.startswith(_TEST_PREFIXES)
 
 
 class SubprocessEnvironmentTests(unittest.TestCase):
@@ -39,14 +39,14 @@ class SubprocessEnvironmentTests(unittest.TestCase):
         self.secret = "invented-provider-secret"
         names = (
             *_SECRET_NAMES,
-            "TRIADMUX_TEST_MARKER",
-            "TRIADMUX_TEST_WORKER_LOCK",
+            "FIRSTCHAIR_TEST_MARKER",
+            "FIRSTCHAIR_TEST_WORKER_LOCK",
         )
         self._saved = {name: os.environ.get(name) for name in names}
         for name in _SECRET_NAMES:
             os.environ[name] = self.secret
-        os.environ["TRIADMUX_TEST_MARKER"] = "present"
-        os.environ["TRIADMUX_TEST_WORKER_LOCK"] = "worker-lock"
+        os.environ["FIRSTCHAIR_TEST_MARKER"] = "present"
+        os.environ["FIRSTCHAIR_TEST_WORKER_LOCK"] = "worker-lock"
 
     def tearDown(self):
         for name, value in self._saved.items():
@@ -68,8 +68,8 @@ print(json.dumps({
         keys = set(result.split(","))
         self.assertTrue(keys)
         self.assertTrue(all(_allowed(name) for name in keys))
-        self.assertIn("TRIADMUX_TEST_MARKER", keys)
-        self.assertIn("TRIADMUX_TEST_WORKER_LOCK", keys)
+        self.assertIn("FIRSTCHAIR_TEST_MARKER", keys)
+        self.assertIn("FIRSTCHAIR_TEST_WORKER_LOCK", keys)
         for name in _SECRET_NAMES:
             self.assertNotIn(name, keys)
         self.assertNotIn(self.secret, result)

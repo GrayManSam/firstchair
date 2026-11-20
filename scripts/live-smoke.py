@@ -9,7 +9,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-MARKER = "TRIADMUX_SMOKE_OK"
+MARKER = "FIRSTCHAIR_SMOKE_OK"
 PROMPT = f"Reply with exactly {MARKER}. Do not use any tools."
 TIMEOUT = 90
 
@@ -64,7 +64,7 @@ def check(provider: str) -> tuple[str, bool]:
     if shutil.which(command[0]) is None:
         return "executable missing from PATH", False
     try:
-        with tempfile.TemporaryDirectory(prefix="triadmux-live-") as directory:
+        with tempfile.TemporaryDirectory(prefix="firstchair-live-") as directory:
             result = subprocess.run(
                 command, cwd=directory, stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, errors="replace", timeout=TIMEOUT,
@@ -91,7 +91,7 @@ def check(provider: str) -> tuple[str, bool]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--report", type=Path, default=Path(".triadmux/live-smoke.json"))
+    parser.add_argument("--report", type=Path, default=Path(".firstchair/live-smoke.json"))
     parser.add_argument("--provider", choices=COMMANDS, help="Run just one provider")
     args = parser.parse_args()
     providers = (args.provider,) if args.provider else tuple(COMMANDS)

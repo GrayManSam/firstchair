@@ -14,9 +14,9 @@ For alpha, test supported event versions, terminal result detection, timeout
 and cancellation, authentication failure and unknown usage with fixtures.
 Treat provider output as data. Keep executable selection, working directory,
 permissions and budget in controller-owned policy. Each current subprocess
-invocation uses a fresh `triadmux-workspace-*` directory and does not inherit
+invocation uses a fresh `firstchair-workspace-*` directory and does not inherit
 the controller cwd. The child environment is an allowlist: interpreter and
-loader paths, locale, and `TRIADMUX_TEST_*`. API keys and `HOME` are not
+loader paths, locale, and `FIRSTCHAIR_TEST_*`. API keys and `HOME` are not
 passed. Saved run records replace values of environment names containing
 `SECRET`, `TOKEN`, `PASSWORD`, `CREDENTIAL`, `API_KEY`, or `_KEY` when the
 value is at least 12 characters. The replacement text is `[redacted]`.
@@ -85,7 +85,7 @@ string `type` and says the event-type list is non-exhaustive. It documents
 newline-delimited JSON and nothing else. It does not read a worker reply,
 usage counts, or a tool-denial outcome.
 
-TriadMux does not treat those guide fields as a worker result until a
+Firstchair does not treat those guide fields as a worker result until a
 sanitized host capture confirms them. Unattended tool denial and sandbox
 scope stay unverified. The live adapter stays disabled. The current smoke
 command still uses `--output-format plain` for the final reply check.
@@ -134,7 +134,7 @@ prompt and requested structured output. No provider returned a result.
 | Claude Code | The headless process timed out after 55 seconds without output. |
 | Grok Build | The Linux sandbox refused to start because it could not create a required bubblewrap placeholder. |
 
-The local TriadMux CLI suite still passed, including both the in-process demo
+The local Firstchair CLI suite still passed, including both the in-process demo
 and synthetic subprocess workflow. A successful provider response remains
 necessary to verify authentication and collect a sanitized event fixture.
 
@@ -146,7 +146,7 @@ python3 scripts/live-smoke.py
 ```
 
 The checks run in temporary working directories and print only their
-outcomes. It saves those same outcomes to `.triadmux/live-smoke.json` and
+outcomes. It saves those same outcomes to `.firstchair/live-smoke.json` and
 exits with status 1 if any check fails. Use `--report PATH` to save elsewhere.
 
 ## Host-terminal results
@@ -159,5 +159,5 @@ uses [Grok's plain output mode](https://docs.x.ai/build/cli/headless-scripting)
 to check the final text separately from its streaming contract.
 
 ```sh
-python3 scripts/live-smoke.py --provider "Grok Build" --report .triadmux/grok-smoke.json
+python3 scripts/live-smoke.py --provider "Grok Build" --report .firstchair/grok-smoke.json
 ```

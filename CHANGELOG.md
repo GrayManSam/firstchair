@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Renamed the project from TriadMux to Firstchair. The distribution, import
+  package and command are now `firstchair`, and the default state directory
+  is `.firstchair/`. For one release, a `triadmux` command prints a notice
+  and runs the same CLI, `.triadmux/` is read when `.firstchair/` is absent,
+  and `TRIADMUX_TEST_` variables still reach provider children. Old run
+  records stay valid.
 - Added structured synthetic reviews, explicit usage provenance, provider
   readiness reporting, and dry-run routing explanations.
 - Added synthetic request and workflow budgets with optional TOML configuration.

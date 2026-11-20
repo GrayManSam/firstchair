@@ -1,4 +1,4 @@
-# TriadMux
+# Firstchair
 
 Read ROADMAP.md and TODO.md to identify the current milestone. Keep changes
 scoped to a testable slice. Run `PYTHONPATH=src python -m unittest discover -s tests -v`.

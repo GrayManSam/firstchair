@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from triadmux.release_tag import (
+from firstchair.release_tag import (
     changelog_notes,
     is_prerelease,
     parse_release_tag,
@@ -113,7 +113,7 @@ class ReleaseTagTests(unittest.TestCase):
             output = root / "github-output.txt"
             completed = subprocess.run(
                 [
-                    sys.executable, "-m", "triadmux.release_tag", "v0.1.0a1",
+                    sys.executable, "-m", "firstchair.release_tag", "v0.1.0a1",
                     "--pyproject", root / "pyproject.toml",
                     "--changelog", root / "CHANGELOG.md",
                     "--notes", notes,
@@ -130,7 +130,7 @@ class ReleaseTagTests(unittest.TestCase):
 
     def test_release_workflow_uses_the_checker_and_annotated_tags(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        self.assertIn("python -m triadmux.release_tag", workflow)
+        self.assertIn("python -m firstchair.release_tag", workflow)
         self.assertIn('git cat-file -t "$GITHUB_REF_NAME"', workflow)
         self.assertIn("--verify-tag", workflow)
         self.assertNotIn("--generate-notes", workflow)

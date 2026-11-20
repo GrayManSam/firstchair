@@ -21,12 +21,31 @@ from .workflow import (
 )
 
 STAGES = ("plan", "review", "synthesize")
+STATE_DIR = Path(".firstchair")
+LEGACY_STATE_DIR = Path(".triadmux")
+LEGACY_NOTICE = (
+    "Firstchair replaces triadmux. "
+    "The triadmux command will be removed in the next minor release."
+)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="triadmux")
+def default_state_dir() -> Path:
+    """Read the former TriadMux state directory until the new one exists."""
+    if not STATE_DIR.exists() and LEGACY_STATE_DIR.is_dir():
+        print(f"Reading former state directory {LEGACY_STATE_DIR}/", file=sys.stderr)
+        return LEGACY_STATE_DIR
+    return STATE_DIR
+
+
+def legacy_main(argv: list[str] | None = None) -> int:
+    print(LEGACY_NOTICE, file=sys.stderr)
+    return main(argv, prog="triadmux")
+
+
+def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
+    parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--version", action="version", version=__version__)
-    parser.add_argument("--state-dir", type=Path, default=Path(".triadmux"))
+    parser.add_argument("--state-dir", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor", help="Discover provider executables on PATH")
     run = commands.add_parser("run", help="Run the synthetic leader/reviewer workflow")
@@ -46,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     recover = commands.add_parser("recover", help="Mark an abandoned run interrupted")
     recover.add_argument("run_id")
     args = parser.parse_args(argv)
+    if args.state_dir is None:
+        args.state_dir = default_state_dir()
 
     try:
         if args.command == "doctor":

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from triadmux.state_listing import list_runs
+from firstchair.state_listing import list_runs
 
 
 class StateListingTests(unittest.TestCase):
@@ -24,7 +24,7 @@ class StateListingTests(unittest.TestCase):
                 ),
             )
             self._write(state_dir, first, dict(legacy, schema_version=1, result="private result"))
-            command = [sys.executable, "-m", "triadmux", "--state-dir", directory]
+            command = [sys.executable, "-m", "firstchair", "--state-dir", directory]
             output = subprocess.check_output([*command, "runs"], text=True, timeout=5)
             self.assertEqual(json.loads(output), {"runs": [legacy, current]})
 
@@ -66,7 +66,7 @@ class StateListingTests(unittest.TestCase):
     def test_runs_command_leaves_missing_state_directory_absent(self):
         with tempfile.TemporaryDirectory() as directory:
             state_dir = Path(directory, "missing")
-            command = [sys.executable, "-m", "triadmux", "--state-dir", str(state_dir)]
+            command = [sys.executable, "-m", "firstchair", "--state-dir", str(state_dir)]
             output = subprocess.check_output([*command, "runs"], text=True, timeout=5)
             self.assertEqual(json.loads(output), {"runs": []})
             self.assertFalse(state_dir.exists())

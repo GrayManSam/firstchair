@@ -1,5 +1,5 @@
 [plugins]
-enabled = ["triadmux"]
+enabled = ["firstchair"]
 
 [permission]
 ask = [
@@ -7,6 +7,6 @@ ask = [
   "Bash(python scripts/live-smoke.py*)",
 ]
 deny = [
-  "Read(.triadmux/**)",
-  "Edit(.triadmux/**)",
+  "Read(.firstchair/**)",
+  "Edit(.firstchair/**)",
 ]

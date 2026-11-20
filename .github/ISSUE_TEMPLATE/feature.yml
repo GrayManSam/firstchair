@@ -1,11 +1,11 @@
 name: Feature request
-description: Propose a TriadMux capability or improvement.
+description: Propose a Firstchair capability or improvement.
 body:
   - type: textarea
     id: use-case
     attributes:
       label: Use case
-      description: Describe the workflow and what you need TriadMux to do.
+      description: Describe the workflow and what you need Firstchair to do.
     validations:
       required: true
   - type: textarea

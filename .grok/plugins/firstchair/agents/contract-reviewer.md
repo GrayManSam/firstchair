@@ -1,7 +1,7 @@
 ---
 name: contract-reviewer
 description: >
-  Read-only review of TriadMux provider parser diffs. Use when a change
+  Read-only review of Firstchair provider parser diffs. Use when a change
   adds or edits an offline provider fixture or parser.
 prompt_mode: full
 permission_mode: plan

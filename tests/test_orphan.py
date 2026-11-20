@@ -21,10 +21,10 @@ import os
 import time
 from pathlib import Path
 
-from triadmux import synthetic
+from firstchair import synthetic
 
 def block(task):
-    path = Path(os.environ["TRIADMUX_TEST_WORKER_LOCK"])
+    path = Path(os.environ["FIRSTCHAIR_TEST_WORKER_LOCK"])
     with path.open("r+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         path.with_suffix(".ready").touch()
@@ -39,7 +39,7 @@ import asyncio
 import sys
 from unittest.mock import patch
 
-from triadmux.cli import main
+from firstchair.cli import main
 
 spawn = asyncio.create_subprocess_exec
 worker_source = sys.argv[2]
@@ -57,7 +57,7 @@ with patch("asyncio.create_subprocess_exec", spawn_blocked_worker):
             state_dir = Path(directory)
             lock_path = state_dir / "worker.lock"
             lock_path.touch()
-            env = dict(os.environ, TRIADMUX_TEST_WORKER_LOCK=str(lock_path))
+            env = dict(os.environ, FIRSTCHAIR_TEST_WORKER_LOCK=str(lock_path))
             with subprocess.Popen(
                 [sys.executable, "-c", controller, directory, worker],
                 env=env, stdout=subprocess.DEVNULL,

@@ -1,4 +1,4 @@
-# TriadMux to-do list
+# Firstchair to-do list
 
 [Roadmap and release gates](ROADMAP.md)
 

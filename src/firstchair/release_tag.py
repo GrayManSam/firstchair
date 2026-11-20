@@ -73,7 +73,7 @@ def _read_package_version(path: Path) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m triadmux.release_tag")
+    parser = argparse.ArgumentParser(prog="python -m firstchair.release_tag")
     parser.add_argument("tag")
     parser.add_argument("--pyproject", type=Path, default=Path("pyproject.toml"))
     parser.add_argument("--changelog", type=Path, default=Path("CHANGELOG.md"))

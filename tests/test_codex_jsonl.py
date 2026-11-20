@@ -1,8 +1,8 @@
 import json
 import unittest
 
-from triadmux.codex_jsonl import CodexReply, CodexUsage, parse_codex_jsonl
-from triadmux.provider import ProviderError
+from firstchair.codex_jsonl import CodexReply, CodexUsage, parse_codex_jsonl
+from firstchair.provider import ProviderError
 
 THREAD_STARTED = {"type": "thread.started", "thread_id": "00000000-0000-4000-8000-000000000001"}
 TURN_STARTED = {"type": "turn.started"}

@@ -1,8 +1,12 @@
-# TriadMux
+# Firstchair
 
-TriadMux is a local-first CLI for coordinating coding assistants. Version
+Firstchair is a local-first CLI for coordinating coding assistants. Version
 **0.0.0** demonstrates a leader, reviewer, and synthesis handoff using
 deterministic synthetic stages. It keeps run records on the local machine.
+
+Formerly TriadMux. The `triadmux` command still works for one release and
+prints a notice. An existing `.triadmux/` state directory is read when
+`.firstchair/` does not exist.
 
 ## Quick start
 
@@ -12,9 +16,9 @@ Requires Python 3.12 or later. From a checkout:
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
-triadmux doctor
-triadmux run --demo "Review the project's build instructions"
-triadmux status <run-id>
+firstchair doctor
+firstchair run --demo "Review the project's build instructions"
+firstchair status <run-id>
 ```
 
 `doctor` locates Codex, Claude Code and Grok executables on PATH and reports
@@ -23,7 +27,7 @@ is ready offline. Run records can contain your task and result. Before a
 record is stored, secret environment values of at least 12 characters are
 replaced with `[redacted]`. Provider subprocesses receive an allowlisted
 environment and do not inherit API keys. Records live in the ignored
-`.triadmux/` directory by default. Use `triadmux --state-dir PATH`
+`.firstchair/` directory by default. Use `firstchair --state-dir PATH`
 to select another location.
 
 The bundled synthetic subprocess adapter simulates a read-only handoff. Run
@@ -32,8 +36,8 @@ the run record includes the worker's structured review and the synthesis
 result. Offline runs record token usage as unknown with null counts.
 
 ```sh
-triadmux run --provider synthetic --dry-run --timeout 5 --total-timeout 10 "Review the build"
-triadmux run --provider synthetic --timeout 5 --total-timeout 10 "Review the build"
+firstchair run --provider synthetic --dry-run --timeout 5 --total-timeout 10 "Review the build"
+firstchair run --provider synthetic --timeout 5 --total-timeout 10 "Review the build"
 ```
 
 `--dry-run` explains provider selection and shows the stage limits without
@@ -58,8 +62,8 @@ max_input_bytes = 65536
 max_output_bytes = 65536
 ```
 
-Use `triadmux runs` to find saved runs by ID, status, and stage. On POSIX,
-`triadmux recover <run-id>` marks an abandoned run as interrupted once the
+Use `firstchair runs` to find saved runs by ID, status, and stage. On POSIX,
+`firstchair recover <run-id>` marks an abandoned run as interrupted once the
 controller releases its run lock. Recovery updates the record only.
 It requires a lock file created by the original run. Keep each run's
 `.lock` file alongside its JSON record. A lifetime pipe stops bundled POSIX
@@ -82,11 +86,11 @@ See [the roadmap](ROADMAP.md) for alpha, beta and release gates and
 
 ## Grok project files
 
-Grok discovers agents under `.grok/`, the `triadmux` plugin, and that
+Grok discovers agents under `.grok/`, the `firstchair` plugin, and that
 plugin's `provider-fixture` skill. Those files stay in the repository for
 offline fixture and parser work. Live adapters stay disabled.
 
-TriadMux is independently maintained and released under the [MIT license](LICENSE).
+Firstchair is independently maintained and released under the [MIT license](LICENSE).
 
 See the [upstream review](docs/upstream-review.md) and
 [provider contract inventory](docs/provider-contracts.md) for the adapter plan.

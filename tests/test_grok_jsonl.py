@@ -2,8 +2,8 @@ import json
 import unittest
 from dataclasses import asdict, fields
 
-from triadmux.grok_jsonl import GrokFrame, validate_grok_jsonl
-from triadmux.provider import ProviderError
+from firstchair.grok_jsonl import GrokFrame, validate_grok_jsonl
+from firstchair.provider import ProviderError
 
 PROBE = {"type": "probe", "id": "fixture-0001", "unused": True}
 TEXT = {"type": "text", "data": "Invented fragment", "usage": {"input_tokens": 4}}

@@ -78,7 +78,8 @@ _SUBPROCESS_ENV_ALLOWLIST = frozenset({
     "DYLD_LIBRARY_PATH",
     "LIBPATH",
 })
-_SUBPROCESS_ENV_PREFIX = "TRIADMUX_TEST_"
+# TRIADMUX_TEST_ is the former name. Accept it for one release.
+_SUBPROCESS_ENV_PREFIXES = ("FIRSTCHAIR_TEST_", "TRIADMUX_TEST_")
 
 
 def _subprocess_environment() -> dict[str, str]:
@@ -88,7 +89,7 @@ def _subprocess_environment() -> dict[str, str]:
     environment = {
         name: value
         for name, value in os.environ.items()
-        if name in _SUBPROCESS_ENV_ALLOWLIST or name.startswith(_SUBPROCESS_ENV_PREFIX)
+        if name in _SUBPROCESS_ENV_ALLOWLIST or name.startswith(_SUBPROCESS_ENV_PREFIXES)
     }
     pythonpath = environment.get("PYTHONPATH")
     if pythonpath is not None:
@@ -104,7 +105,7 @@ async def _run_process(
 ) -> bytes:
     use_process_group = os.name == "posix"
     # Remove the directory only after this function has waited on the child.
-    with TemporaryDirectory(prefix="triadmux-workspace-") as workspace:
+    with TemporaryDirectory(prefix="firstchair-workspace-") as workspace:
         spawn = {
             "stdin": request,
             "stdout": subprocess.PIPE,
@@ -211,7 +212,7 @@ class SyntheticProvider:
             object.__setattr__(self, "_deadline", monotonic() + self.total_timeout)
 
     def run(self, stage: str, task: str | WorkerReview) -> str | WorkerReview:
-        argv = (sys.executable, "-m", "triadmux.synthetic", stage)
+        argv = (sys.executable, "-m", "firstchair.synthetic", stage)
         decode = read_review if stage == "review" else _read_text
         if os.name != "posix":
             return _invoke(argv, task, self.limits, decode, self._deadline, ())

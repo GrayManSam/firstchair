@@ -6,6 +6,8 @@ build/
 dist/
 .env
 .env.*
+.firstchair/
+# Formerly TriadMux. Existing checkouts may still hold this state directory.
 .triadmux/
 *.sqlite*
 .coverage

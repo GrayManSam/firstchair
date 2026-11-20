@@ -1,8 +1,8 @@
 import json
 import unittest
 
-from triadmux.claude_json import parse_claude_json
-from triadmux.provider import ProviderError
+from firstchair.claude_json import parse_claude_json
+from firstchair.provider import ProviderError
 
 SUCCESS = {"type": "result", "subtype": "success", "is_error": False, "result": "Invented reply"}
 

@@ -2,9 +2,9 @@
 
 ## Reporting
 
-Use **Security → Advisories → Report a vulnerability** on the TriadMux
+Use **Security → Advisories → Report a vulnerability** on the Firstchair
 GitHub repository to contact the maintainers privately. Provide the affected
-TriadMux and provider CLI versions, OS, impact, and a sanitized explanation of
+Firstchair and provider CLI versions, OS, impact, and a sanitized explanation of
 the conditions under which the issue occurs. Keep credentials, personal data,
 and production logs out of attachments and examples. Use the private advisory
 thread to coordinate disclosure with maintainers.
