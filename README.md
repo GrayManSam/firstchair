@@ -84,6 +84,30 @@ Run the tests with `PYTHONPATH=src python -m unittest discover -s tests -v`.
 See [the roadmap](ROADMAP.md) for alpha, beta and release gates and
 [the to-do list](TODO.md) for the next implementation slice.
 
+## Multi-agent development
+
+Maintainers can lead development from Claude Code, Codex, or Grok Build.
+Codex and Grok Build can run as headless workers. The installed
+`firstchair delegate` command runs one bounded task per worker in a Git
+worktree outside the checkout. Read tasks use a disposable
+worktree. Write tasks keep branch `delegate/NAME` for review. See
+[the orchestration guide](docs/orchestration.md). Delegation
+uses your existing provider logins and is separate from Firstchair's own
+adapters, which stay disabled.
+
+```sh
+firstchair delegate run auto --lead codex --dry-run
+firstchair delegate run auto --lead codex --name parser-review "Review the parser tests"
+firstchair delegate list
+```
+
+Grok loads `AGENTS.md` and `.grok/` only in a trusted folder. Run
+`grok --trust` once in the checkout. Worktrees of a trusted checkout inherit it.
+
+Use `firstchair auth login PROVIDER PROFILE` to sign in through the provider
+CLI, and `firstchair auth list` to see local aliases. The orchestration guide
+describes credential storage and how to select an account for a worker.
+
 ## Grok project files
 
 Grok discovers agents under `.grok/`, the `firstchair` plugin, and that

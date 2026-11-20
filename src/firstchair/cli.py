@@ -6,8 +6,10 @@ import sys
 from functools import partial
 from pathlib import Path
 
-from . import __version__
+from . import __version__, accounts
 from .config import read_synthetic_config
+from .delegation import configure_parser as configure_delegate_parser
+from .delegation import execute as execute_delegation
 from .inventory import provider_inventory, routing_explanation
 from .provider import ExecutionLimits, SyntheticProvider
 from .state_listing import list_runs
@@ -64,7 +66,15 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
     commands.add_parser("runs", help="List saved run summaries")
     recover = commands.add_parser("recover", help="Mark an abandoned run interrupted")
     recover.add_argument("run_id")
+    delegate = commands.add_parser("delegate", help="Dispatch workers in isolated Git worktrees")
+    configure_delegate_parser(delegate)
+    auth = commands.add_parser("auth", help="Manage named provider logins")
+    accounts.configure_parser(auth)
     args = parser.parse_args(argv)
+    if args.command == "auth":
+        return accounts.execute(args)
+    if args.command == "delegate":
+        return execute_delegation(args)
     if args.state_dir is None:
         args.state_dir = default_state_dir()
 

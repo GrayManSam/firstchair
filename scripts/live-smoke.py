@@ -6,8 +6,12 @@ import json
 import shutil
 import subprocess
 import tempfile
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from firstchair.accounts import CLAUDE_PROBE, claude_failure
 
 MARKER = "FIRSTCHAIR_SMOKE_OK"
 PROMPT = f"Reply with exactly {MARKER}. Do not use any tools."
@@ -18,10 +22,7 @@ COMMANDS = {
         "codex", "--ask-for-approval", "never", "exec", "--ephemeral",
         "--skip-git-repo-check", "--sandbox", "read-only", "--json", PROMPT,
     ),
-    "Claude Code": (
-        "claude", "-p", PROMPT, "--tools", "", "--setting-sources", "",
-        "--no-session-persistence", "--output-format", "json",
-    ),
+    "Claude Code": CLAUDE_PROBE,
     "Grok Build": (
         "grok", "--no-auto-update", "-p", PROMPT, "--output-format", "plain",
     ),
@@ -75,6 +76,12 @@ def check(provider: str) -> tuple[str, bool]:
         return f"could not start (OS error {error.errno})", False
 
     if result.returncode:
+        if provider == "Claude Code":
+            reason = claude_failure(result.stdout)
+            if reason == "rate_limited":
+                return "provider rate limit (HTTP 429); retry after allowance resets", False
+            if reason == "authorization_failed":
+                return "provider authorization failed; check native login and organization access", False
         diagnostic = result.stderr.casefold()
         if "read-only file system" in diagnostic:
             return "startup failed on a read-only filesystem", False

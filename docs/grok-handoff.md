@@ -67,3 +67,11 @@ remote `private` at https://github.com/GrayManSam/firstchair-private. Hosted
 CI for that push has started and is not yet recorded as green. Keep
 transcripts, local state, account information, and credentials out of
 work products and Git.
+
+## Running as a delegated worker
+
+A Claude Code or Codex lead can dispatch Grok through
+`scripts/delegate.py`. Read tasks run in a disposable worktree. Write
+tasks run on branch `delegate/NAME`. Grok runs with `--sandbox workspace`
+because the read-only profile needs bubblewrap, which fails on this host.
+The folder must be trusted once with `grok --trust`.

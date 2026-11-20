@@ -34,13 +34,20 @@
 - [x] Enforce a shared time budget across synthetic stages and test budget rejection.
 - [x] Enforce per-stage request byte budgets and expose synthetic limits through explicit TOML configuration.
 - [x] Report offline usage as unknown and explain provider readiness and routing.
+- [x] Let Claude Code, Codex and Grok Build sessions lead the maintainer dispatcher and verify automatic worker selection with synthetic CLIs.
+- [x] Record version-validated token usage for Codex delegation summaries and mark unavailable telemetry as unknown.
 - [x] Defer optional Claude Swap support for alpha and document acceptance cases for a future bridge.
 - [x] Verify installed-package examples locally and add a release-wheel smoke check.
+- [x] Install the worktree dispatcher as `firstchair delegate` and verify live Codex and Grok read jobs on the development host.
 - [ ] Verify the hosted support matrix and publish the alpha prerelease.
 
 ## Beta and release
 
 - [ ] Implement guarded recovery, eligible-provider fallback, bounded concurrency and explicit workspace isolation.
+- [ ] Validate a Claude worker permissions contract and verified usage telemetry for Claude and Grok.
+- [x] Add native sign-in and private named provider homes, with sanitized login and Claude inference checks.
+- [ ] Verify simultaneous signed-in accounts on each supported host and validate opt-in account quota snapshots and per-process profile selection, with freshness, cooldowns and explicit account policy.
+- [ ] Route among eligible model and account profiles using task requirements and measured usage, and record the selection rationale.
 - [ ] Verify state backup, restart, migration and workspace recovery paths with synthetic data.
 - [ ] Rehearse install and upgrade on advertised platforms. Record opt-in provider smoke results.
 - [ ] Cut a beta, triage compatibility feedback, and close release-blocking reliability and security defects.
