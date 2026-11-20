@@ -177,7 +177,10 @@ async def run_bounded(
                 while await process.stdout.read(65536):
                     pass
         except TimeoutError:
-            pass
+            # Release the pipe now so it is not finalized after the loop closes.
+            transport = getattr(process, "_transport", None)
+            if transport is not None:
+                transport.close()
         await process.wait()
         raise
 

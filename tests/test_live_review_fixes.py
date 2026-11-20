@@ -46,7 +46,7 @@ class LiveReviewFixTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertTrue(os.path.isabs(executable))
-        self.assertEqual(executable, str(fake))
+        self.assertEqual(os.path.realpath(executable), os.path.realpath(fake))
 
     def test_failed_stage_without_counts_makes_total_partial(self):
         stages = {"plan": {"usage": _usage("measured", 5)}}
@@ -67,11 +67,14 @@ class LiveReviewFixTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "uses setsid to leave the process group")
     def test_timeout_does_not_wait_on_an_escaped_descendant_holding_stdout(self):
-        script = textwrap.dedent("""
-            import os, subprocess, sys, time
-            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+        pid_file = Path(tempfile.mkdtemp()) / "escaped.pid"
+        script = textwrap.dedent(f"""
+            import pathlib, subprocess, sys, time
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+            pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))
             time.sleep(30)
         """)
+        self.addCleanup(self._kill_escaped, pid_file)
 
         async def run() -> None:
             async with asyncio.timeout(0.5):
@@ -85,6 +88,13 @@ class LiveReviewFixTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 asyncio.run(run())
         self.assertLess(monotonic() - started, 10)
+
+    @staticmethod
+    def _kill_escaped(pid_file: Path) -> None:
+        try:
+            os.kill(int(pid_file.read_text()), 9)
+        except (OSError, ValueError):
+            pass
 
 
 if __name__ == "__main__":
