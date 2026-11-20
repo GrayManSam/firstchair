@@ -1,4 +1,4 @@
-# Contributing to TriadMux
+# Contributing to Firstchair
 
 Use Python 3.12 or later. For an isolated local checkout, run these commands
 from the repository root.
@@ -9,7 +9,7 @@ python3 -m venv .venv
 python -m pip install -e .
 python -m unittest discover -s tests -v
 python -m pip check
-triadmux --version
+firstchair --version
 ```
 
 Use synthetic inputs and fake provider executables in automated tests.
@@ -64,15 +64,15 @@ and a new tag.
 ```sh
 git switch main
 git pull --ff-only
-PYTHONPATH=src python -m triadmux.release_tag v0.1.0a1
-git tag -a v0.1.0a1 -m 'TriadMux 0.1.0a1'
+PYTHONPATH=src python -m firstchair.release_tag v0.1.0a1
+git tag -a v0.1.0a1 -m 'Firstchair 0.1.0a1'
 git push origin refs/tags/v0.1.0a1
 ```
 
-The tag message must contain `TriadMux` and the package version. The workflow
+The tag message must contain `Firstchair` and the package version. The workflow
 rejects any other tag name, a lightweight tag, and a tag that is not on
 `main`. It runs CI, then publishes the wheel, source distribution, and SHA-256
-checksum file. The GitHub Release title is `TriadMux <version>` and the body
+checksum file. The GitHub Release title is `Firstchair <version>` and the body
 is the changelog section for that version. `v0.0.0`, alpha, beta, and release
 candidate tags publish as prereleases. A stable `X.Y.Z` tag does not.
 

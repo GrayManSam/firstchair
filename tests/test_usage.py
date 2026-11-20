@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from uuid import uuid4
 
+from firstchair.usage import Usage
+
 
 class UsageTests(unittest.TestCase):
     def test_offline_runs_persist_unknown_token_usage(self):
@@ -16,7 +18,7 @@ class UsageTests(unittest.TestCase):
         )
         for options, expected_status, expected_exit in cases:
             with self.subTest(options=options), tempfile.TemporaryDirectory() as directory:
-                command = [sys.executable, "-m", "triadmux", "--state-dir", directory]
+                command = [sys.executable, "-m", "firstchair", "--state-dir", directory]
                 run = subprocess.run(
                     [*command, "run", *options, "Review the README"],
                     capture_output=True, text=True, timeout=10,
@@ -48,8 +50,18 @@ class UsageTests(unittest.TestCase):
             encoded = json.dumps(legacy)
             path.write_text(encoded, encoding="utf-8")
             status = subprocess.run(
-                [sys.executable, "-m", "triadmux", "--state-dir", directory, "status", run_id],
+                [sys.executable, "-m", "firstchair", "--state-dir", directory, "status", run_id],
                 capture_output=True, text=True, timeout=10, check=True,
             )
             self.assertEqual(json.loads(status.stdout), legacy)
             self.assertEqual(path.read_text(encoding="utf-8"), encoded)
+
+    def test_serializes_usage(self):
+        self.assertEqual(
+            Usage().as_record(),
+            {"provenance": "unknown", "input_tokens": None, "output_tokens": None},
+        )
+        self.assertEqual(
+            Usage("measured", 4, 0).as_record(),
+            {"provenance": "measured", "input_tokens": 4, "output_tokens": 0},
+        )

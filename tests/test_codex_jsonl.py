@@ -1,8 +1,9 @@
 import json
 import unittest
 
-from triadmux.codex_jsonl import CodexReply, CodexUsage, parse_codex_jsonl
-from triadmux.provider import ProviderError
+from firstchair.codex_jsonl import CodexReply, CodexUsage, parse_codex_jsonl
+from firstchair.provider import ProviderError
+from firstchair.usage import Reply, Usage
 
 THREAD_STARTED = {"type": "thread.started", "thread_id": "00000000-0000-4000-8000-000000000001"}
 TURN_STARTED = {"type": "turn.started"}
@@ -116,6 +117,15 @@ class CodexJsonlTests(unittest.TestCase):
     def test_requires_supported_version_and_successful_process_exit(self):
         output = response(THREAD_STARTED, TURN_STARTED, AGENT_MESSAGE, TURN_COMPLETED)
         with self.assertRaisesRegex(ProviderError, "^unsupported_provider_version$"):
-            parse_codex_jsonl(output, version="0.170.1", returncode=0)
+            parse_codex_jsonl(output, version="0.180.0", returncode=0)
         with self.assertRaisesRegex(ProviderError, "^provider_exit$"):
             parse_codex_jsonl(output, version="0.170.0", returncode=1)
+
+    def test_reply_aliases_and_compatible_version(self):
+        self.assertIs(CodexUsage, Usage)
+        self.assertIs(CodexReply, Reply)
+        output = response(THREAD_STARTED, TURN_STARTED, AGENT_MESSAGE, TURN_COMPLETED)
+        self.assertEqual(
+            parse_codex_jsonl(output, version="0.170.1", returncode=0),
+            Reply("Invented reply", Usage()),
+        )

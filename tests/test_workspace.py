@@ -5,7 +5,7 @@ import time
 import unittest
 from pathlib import Path
 
-from triadmux.provider import ExecutionLimits, ProviderError, invoke
+from firstchair.provider import ExecutionLimits, ProviderError, invoke
 
 
 def _workspace_directories() -> set[Path]:
@@ -13,7 +13,7 @@ def _workspace_directories() -> set[Path]:
     return {
         path
         for root in roots
-        for path in root.glob("triadmux-workspace-*")
+        for path in root.glob("firstchair-workspace-*")
         if path.is_dir()
     }
 
@@ -32,7 +32,7 @@ print(json.dumps({"schema_version": 1, "result": os.getcwd()}))
         try:
             result = invoke((sys.executable, "-c", script), "task", ExecutionLimits())
             workspace = Path(result)
-            self.assertTrue(workspace.name.startswith("triadmux-workspace-"))
+            self.assertTrue(workspace.name.startswith("firstchair-workspace-"))
             self.assertNotEqual(workspace.resolve(), cwd.resolve())
             self.assertFalse(workspace.exists())
             self.assertFalse(marker.exists())

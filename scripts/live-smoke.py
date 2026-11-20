@@ -6,10 +6,14 @@ import json
 import shutil
 import subprocess
 import tempfile
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-MARKER = "TRIADMUX_SMOKE_OK"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from firstchair.accounts import CLAUDE_PROBE, claude_failure
+
+MARKER = "FIRSTCHAIR_SMOKE_OK"
 PROMPT = f"Reply with exactly {MARKER}. Do not use any tools."
 TIMEOUT = 90
 
@@ -18,10 +22,7 @@ COMMANDS = {
         "codex", "--ask-for-approval", "never", "exec", "--ephemeral",
         "--skip-git-repo-check", "--sandbox", "read-only", "--json", PROMPT,
     ),
-    "Claude Code": (
-        "claude", "-p", PROMPT, "--tools", "", "--setting-sources", "",
-        "--no-session-persistence", "--output-format", "json",
-    ),
+    "Claude Code": CLAUDE_PROBE,
     "Grok Build": (
         "grok", "--no-auto-update", "-p", PROMPT, "--output-format", "plain",
     ),
@@ -64,7 +65,7 @@ def check(provider: str) -> tuple[str, bool]:
     if shutil.which(command[0]) is None:
         return "executable missing from PATH", False
     try:
-        with tempfile.TemporaryDirectory(prefix="triadmux-live-") as directory:
+        with tempfile.TemporaryDirectory(prefix="firstchair-live-") as directory:
             result = subprocess.run(
                 command, cwd=directory, stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, errors="replace", timeout=TIMEOUT,
@@ -75,6 +76,12 @@ def check(provider: str) -> tuple[str, bool]:
         return f"could not start (OS error {error.errno})", False
 
     if result.returncode:
+        if provider == "Claude Code":
+            reason = claude_failure(result.stdout)
+            if reason == "rate_limited":
+                return "provider rate limit (HTTP 429); retry after allowance resets", False
+            if reason == "authorization_failed":
+                return "provider authorization failed; check native login and organization access", False
         diagnostic = result.stderr.casefold()
         if "read-only file system" in diagnostic:
             return "startup failed on a read-only filesystem", False
@@ -91,7 +98,7 @@ def check(provider: str) -> tuple[str, bool]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--report", type=Path, default=Path(".triadmux/live-smoke.json"))
+    parser.add_argument("--report", type=Path, default=Path(".firstchair/live-smoke.json"))
     parser.add_argument("--provider", choices=COMMANDS, help="Run just one provider")
     args = parser.parse_args()
     providers = (args.provider,) if args.provider else tuple(COMMANDS)

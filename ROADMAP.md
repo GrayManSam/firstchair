@@ -1,6 +1,6 @@
-# TriadMux roadmap
+# Firstchair roadmap
 
-TriadMux coordinates local coding CLIs through a Python controller. The first useful workflow takes a user-approved task, runs a bounded provider invocation, and records an inspectable outcome. Each milestone expands that workflow through observable acceptance tests.
+Firstchair coordinates local coding CLIs through a Python controller. The first useful workflow takes a user-approved task, runs a bounded provider invocation, and records an inspectable outcome. Each milestone expands that workflow through observable acceptance tests.
 
 | Stage | Git tag | Python version | Goal |
 | --- | --- | --- | --- |

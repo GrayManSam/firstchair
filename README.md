@@ -1,29 +1,84 @@
-# TriadMux
+# Firstchair
 
-TriadMux is a local-first CLI for coordinating coding assistants. Version
-**0.0.0** demonstrates a leader, reviewer, and synthesis handoff using
-deterministic synthetic stages. It keeps run records on the local machine.
+Firstchair is a local-first CLI that makes the coding assistants you already
+use check each other's work. One model leads: it plans, then a second model
+reviews that plan, and the lead writes the final answer taking the review
+into account. Firstchair drives Codex CLI, Claude Code and Grok Build through
+their own headless modes and sign-ins, runs them read-only, and keeps a
+record of every run on your machine.
+
+```sh
+firstchair run --provider codex --reviewer claude --workspace . --format text \
+  "Find the riskiest error handling in src/ and propose fixes"
+```
+
+Formerly TriadMux. The `triadmux` command still works for one release and
+prints a notice. An existing `.triadmux/` state directory is read when
+`.firstchair/` does not exist.
 
 ## Quick start
 
-Requires Python 3.12 or later. From a checkout:
+Requires Python 3.12 or later and at least one of Codex CLI, Claude Code or
+Grok Build, installed and signed in.
 
 ```sh
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
-triadmux doctor
-triadmux run --demo "Review the project's build instructions"
-triadmux status <run-id>
+pipx install git+https://github.com/GrayManSam/firstchair   # or: pip install -e . from a checkout
+firstchair doctor
+firstchair run --provider codex --format text "Explain what this project's tests cover"
+firstchair runs
+firstchair status <run-id>
 ```
 
-`doctor` locates Codex, Claude Code and Grok executables on PATH and reports
-each provider's readiness without launching it. The bundled synthetic provider
+`doctor` locates Codex, Claude Code and Grok executables on PATH, runs each
+one's `--version`, and reports whether that version is verified, compatible
+or unsupported. `doctor --offline` only searches PATH.
+
+## Live runs
+
+`firstchair run --provider PROVIDER TASK` runs three stages:
+
+1. **plan**: the lead provider plans the task.
+2. **review**: the reviewer critiques the plan. It defaults to the lead;
+   pass `--reviewer` to get a second model's opinion.
+3. **synthesize**: the lead writes the final answer from its plan and the review.
+
+| Option | Effect |
+| --- | --- |
+| `--reviewer codex\|claude\|grok` | Provider for the review stage |
+| `--workspace DIR` | Directory providers may read. Without it they run in an empty temporary directory |
+| `--profile NAME`, `--reviewer-profile NAME` | Use a named sign-in from `firstchair auth login` |
+| `--timeout SECONDS` | Per-stage limit (default 600) |
+| `--total-timeout SECONDS` | Budget across all stages |
+| `--format text` | Print the plan, review and result instead of the JSON record |
+| `--dry-run` | Show roles, versions and limits without starting a model |
+| `TASK` = `-` | Read the task from stdin |
+
+Providers run **read-only**: Codex uses its `read-only` sandbox, Claude Code
+gets only `Read`, `Grep` and `Glob`, and Grok Build gets only `read_file`,
+`list_dir` and `grep` with deny-by-default permissions. MCP servers are
+switched off for all three. API key variables are never passed to a provider,
+so each one uses its own native sign-in. On timeout or Ctrl-C the provider's
+whole process group is killed and the run is recorded as failed or
+interrupted. Each run record keeps every stage's text, provider version and
+token usage. Usage is `measured` when the provider reports counts, `partial`
+when only some stages did, and `unknown` otherwise. Token counts are not a
+bill.
+
+A Claude Code account without headless usage allowance fails with
+`rate_limited`. Unknown provider versions are refused before a run starts.
+
+## Offline demo
+
+The demo and bundled synthetic provider need no sign-in:
+
+```sh
+firstchair run --demo "Review the project's build instructions"
+``` The bundled synthetic provider
 is ready offline. Run records can contain your task and result. Before a
 record is stored, secret environment values of at least 12 characters are
 replaced with `[redacted]`. Provider subprocesses receive an allowlisted
 environment and do not inherit API keys. Records live in the ignored
-`.triadmux/` directory by default. Use `triadmux --state-dir PATH`
+`.firstchair/` directory by default. Use `firstchair --state-dir PATH`
 to select another location.
 
 The bundled synthetic subprocess adapter simulates a read-only handoff. Run
@@ -32,8 +87,8 @@ the run record includes the worker's structured review and the synthesis
 result. Offline runs record token usage as unknown with null counts.
 
 ```sh
-triadmux run --provider synthetic --dry-run --timeout 5 --total-timeout 10 "Review the build"
-triadmux run --provider synthetic --timeout 5 --total-timeout 10 "Review the build"
+firstchair run --provider synthetic --dry-run --timeout 5 --total-timeout 10 "Review the build"
+firstchair run --provider synthetic --timeout 5 --total-timeout 10 "Review the build"
 ```
 
 `--dry-run` explains provider selection and shows the stage limits without
@@ -58,15 +113,15 @@ max_input_bytes = 65536
 max_output_bytes = 65536
 ```
 
-Use `triadmux runs` to find saved runs by ID, status, and stage. On POSIX,
-`triadmux recover <run-id>` marks an abandoned run as interrupted once the
+Use `firstchair runs` to find saved runs by ID, status, and stage. On POSIX,
+`firstchair recover <run-id>` marks an abandoned run as interrupted once the
 controller releases its run lock. Recovery updates the record only.
 It requires a lock file created by the original run. Keep each run's
 `.lock` file alongside its JSON record. A lifetime pipe stops bundled POSIX
 workers when their controller dies.
 
-Live adapters are disabled pending workspace isolation, process-tree cleanup,
-and version-specific contract verification.
+A live provider that is killed with SIGKILL together with its controller is
+not stopped by the lifetime pipe. Use `firstchair recover` to mark that run.
 
 ## Verification
 
@@ -80,13 +135,37 @@ Run the tests with `PYTHONPATH=src python -m unittest discover -s tests -v`.
 See [the roadmap](ROADMAP.md) for alpha, beta and release gates and
 [the to-do list](TODO.md) for the next implementation slice.
 
+## Multi-agent development
+
+Maintainers can lead development from Claude Code, Codex, or Grok Build.
+Codex and Grok Build can run as headless workers. The installed
+`firstchair delegate` command runs one bounded task per worker in a Git
+worktree outside the checkout. Read tasks use a disposable
+worktree. Write tasks keep branch `delegate/NAME` for review. See
+[the orchestration guide](docs/orchestration.md). Delegation
+uses your existing provider logins. Unlike `firstchair run`, write-mode
+delegation lets a worker edit files inside its worktree.
+
+```sh
+firstchair delegate run auto --lead codex --dry-run
+firstchair delegate run auto --lead codex --name parser-review "Review the parser tests"
+firstchair delegate list
+```
+
+Grok loads `AGENTS.md` and `.grok/` only in a trusted folder. Run
+`grok --trust` once in the checkout. Worktrees of a trusted checkout inherit it.
+
+Use `firstchair auth login PROVIDER PROFILE` to sign in through the provider
+CLI, and `firstchair auth list` to see local aliases. The orchestration guide
+describes credential storage and how to select an account for a worker.
+
 ## Grok project files
 
-Grok discovers agents under `.grok/`, the `triadmux` plugin, and that
+Grok discovers agents under `.grok/`, the `firstchair` plugin, and that
 plugin's `provider-fixture` skill. Those files stay in the repository for
-offline fixture and parser work. Live adapters stay disabled.
+offline fixture and parser work.
 
-TriadMux is independently maintained and released under the [MIT license](LICENSE).
+Firstchair is independently maintained and released under the [MIT license](LICENSE).
 
 See the [upstream review](docs/upstream-review.md) and
 [provider contract inventory](docs/provider-contracts.md) for the adapter plan.

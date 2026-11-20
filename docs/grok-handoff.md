@@ -1,4 +1,4 @@
-# TriadMux handoff for Grok
+# Firstchair handoff for Grok
 
 Continue the MVP toward `0.1.0a1` from the Git checkpoint that introduced
 this file. The package version at this checkpoint is `0.0.0`. Read
@@ -12,8 +12,8 @@ this file. The package version at this checkpoint is `0.0.0`. Read
 - The CLI previews routing and limits, loads optional TOML configuration,
   and enforces per-stage input and output bounds plus a shared time budget.
 - POSIX recovery uses a per-run lock. The bundled synthetic worker exits
-  when its controller dies. Use `triadmux runs` to find an abandoned run and
-  `triadmux recover <run-id>` to mark it interrupted.
+  when its controller dies. Use `firstchair runs` to find an abandoned run and
+  `firstchair recover <run-id>` to mark it interrupted.
 - Codex and Claude result parsers have invented offline fixtures. Live
   routing remains disabled. The release workflow checks a synthetic
   handoff and its persisted status from the installed wheel.
@@ -27,7 +27,7 @@ publication are pending.
 
 ```sh
 PYTHONPATH=src python -m unittest discover -s tests -v
-PYTHONPATH=src python -m triadmux doctor
+PYTHONPATH=src python -m firstchair doctor
 git diff --check
 ```
 
@@ -40,8 +40,8 @@ usage, and unattended tool denial. Keep the adapter disabled while those
 gates are open. Any live smoke requires explicit maintainer opt-in and a
 credential-isolated environment.
 
-Grok project files live under `.grok/`: the `triadmux` agent, the
-`contract-reviewer` persona, and the `triadmux` plugin with the
+Grok project files live under `.grok/`: the `firstchair` agent, the
+`contract-reviewer` persona, and the `firstchair` plugin with the
 `provider-fixture` skill and `contract-reviewer` agent. `.grok/config.toml`
 enables that plugin and asks before `scripts/live-smoke.py`. Folder trust
 is required before Grok loads those project files.
@@ -56,14 +56,22 @@ records replace secret environment values of at least 12 characters with
 `[redacted]`. Live adapters stay disabled.
 
 Public GitHub Releases use annotated tags of the form `v` plus the package
-version. `python -m triadmux.release_tag` checks the tag, version, and
+version. `python -m firstchair.release_tag` checks the tag, version, and
 changelog before a tag is pushed. No tag has been created.
 
 The other open gates are live workspace isolation and process-tree
 cleanup, hosted CI across the configured matrix, and the alpha release
 rehearsal. `main` tracks the public repository
-https://github.com/GrayManSam/triadmux. The same history is on the private
-remote `private` at https://github.com/GrayManSam/triadmux-private. Hosted
+https://github.com/GrayManSam/firstchair. The same history is on the private
+remote `private` at https://github.com/GrayManSam/firstchair-private. Hosted
 CI for that push has started and is not yet recorded as green. Keep
 transcripts, local state, account information, and credentials out of
 work products and Git.
+
+## Running as a delegated worker
+
+A Claude Code or Codex lead can dispatch Grok through
+`scripts/delegate.py`. Read tasks run in a disposable worktree. Write
+tasks run on branch `delegate/NAME`. Grok runs with `--sandbox workspace`
+because the read-only profile needs bubblewrap, which fails on this host.
+The folder must be trusted once with `grok --trust`.

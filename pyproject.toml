@@ -3,8 +3,8 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "triadmux"
-version = "0.0.0"
+name = "firstchair"
+version = "0.1.0a1"
 description = "Local-first orchestration for AI coding CLIs"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,7 +12,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 
 [project.scripts]
-triadmux = "triadmux.cli:main"
+firstchair = "firstchair.cli:main"
+# Formerly TriadMux. Remove in the next minor release.
+triadmux = "firstchair.cli:legacy_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

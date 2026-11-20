@@ -1,12 +1,12 @@
 import unittest
 from unittest.mock import patch
 
-from triadmux.inventory import provider_inventory, routing_explanation
+from firstchair.inventory import provider_inventory, routing_explanation
 
 
 class ProviderInventoryTests(unittest.TestCase):
     def test_routing_explains_both_offline_modes_without_path_discovery(self):
-        with patch("triadmux.inventory.shutil.which") as find:
+        with patch("firstchair.inventory.shutil.which") as find:
             for selected, alternate in (("demo", "synthetic"), ("synthetic", "demo")):
                 with self.subTest(selected=selected):
                     self.assertEqual(
@@ -25,7 +25,7 @@ class ProviderInventoryTests(unittest.TestCase):
 
     def test_path_discovery_does_not_enable_live_providers(self):
         executables = {"codex": "fixture/codex"}
-        with patch("triadmux.inventory.shutil.which", side_effect=executables.get):
+        with patch("firstchair.inventory.shutil.which", side_effect=executables.get):
             providers = provider_inventory()
 
         self.assertEqual(
@@ -52,7 +52,7 @@ class ProviderInventoryTests(unittest.TestCase):
                 )
 
     def test_bundled_provider_is_ready_without_an_external_executable(self):
-        with patch("triadmux.inventory.shutil.which", return_value=None):
+        with patch("firstchair.inventory.shutil.which", return_value=None):
             providers = provider_inventory()
 
         self.assertEqual(

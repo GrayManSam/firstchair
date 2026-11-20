@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from triadmux.provider import ExecutionLimits, ProviderError, SyntheticProvider, invoke
+from firstchair.provider import ExecutionLimits, ProviderError, SyntheticProvider, invoke
 
 
 class ProviderTests(unittest.TestCase):
@@ -22,7 +22,7 @@ import signal
 import sys
 from unittest.mock import patch
 
-from triadmux.cli import main
+from firstchair.cli import main
 
 spawn = asyncio.create_subprocess_exec
 workers = []
@@ -50,7 +50,7 @@ raise SystemExit(status)
             self.assertEqual(record["status"], "interrupted")
             self.assertEqual(record["stage"], "plan")
             saved = subprocess.run(
-                [sys.executable, "-m", "triadmux", "--state-dir", directory,
+                [sys.executable, "-m", "firstchair", "--state-dir", directory,
                  "status", record["run_id"]],
                 capture_output=True, text=True, timeout=10,
             )
@@ -59,7 +59,7 @@ raise SystemExit(status)
 
     def test_synthetic_subprocess_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
-            command = [sys.executable, "-m", "triadmux", "--state-dir", directory]
+            command = [sys.executable, "-m", "firstchair", "--state-dir", directory]
             run = subprocess.run(
                 [*command, "run", "--provider", "synthetic", "Review the README"],
                 capture_output=True, text=True, check=True, timeout=10,
@@ -84,14 +84,14 @@ raise SystemExit(status)
             response = json.dumps({"schema_version": 1, "result": malformed}).encode()
             with (
                 self.subTest(result=malformed),
-                patch("triadmux.provider._read_response", return_value=response),
+                patch("firstchair.provider._read_response", return_value=response),
                 self.assertRaisesRegex(ProviderError, "^malformed_response$"),
             ):
                 SyntheticProvider(ExecutionLimits()).run("review", "synthetic assignment")
 
     def test_output_limit_failure_is_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
-            command = [sys.executable, "-m", "triadmux", "--state-dir", directory]
+            command = [sys.executable, "-m", "firstchair", "--state-dir", directory]
             run = subprocess.run(
                 [*command, "run", "--provider", "synthetic", "--max-output-bytes", "1", "task"],
                 capture_output=True, text=True, timeout=10,

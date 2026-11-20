@@ -1,5 +1,42 @@
 # Provider contract inventory
 
+## Live read-only adapters (0.1.0a1)
+
+`firstchair run --provider codex|claude|grok` uses the commands below. The
+controller checks `--version` first and accepts only a verified version or
+one inside the compatible range in `src/firstchair/versions.py`.
+
+| Provider | Verified | Command | Prompt |
+| --- | --- | --- | --- |
+| Codex CLI | 0.170.0, 0.171.0 | `codex --ask-for-approval never exec --ephemeral --sandbox read-only --skip-git-repo-check --color never --config mcp_servers={} --json -` | stdin |
+| Claude Code | 2.1.328, 2.1.329 | `claude -p --output-format json --no-session-persistence --setting-sources "" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --tools TOOLS --permission-mode dontAsk` | stdin |
+| Grok Build | 1.0.77 | `grok --no-auto-update --prompt-file FILE --output-format streaming-json --no-subagents --disable-web-search --sandbox workspace --permission-mode dontAsk --tools TOOLS --deny mcp__* --deny Edit --deny Write --deny Bash --deny WebFetch` | file |
+
+`TOOLS` is empty without `--workspace`. With a workspace it is
+`Read,Grep,Glob` for Claude Code and `read_file,list_dir,grep` for Grok
+Build. The working directory is the workspace, or an empty temporary
+directory. The child environment is the controller allowlist plus `HOME`,
+`USER`, XDG directories, proxy and CA variables and the provider's own home
+variable (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`). Credential
+variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `XAI_API_KEY`
+are removed.
+
+Host findings on 2026-11-20 (Fedora 43):
+
+- Grok Build `--tools ""` still offers `run_terminal_command`, and `--tools`
+  never removes MCP tools. A user's configured MCP servers, including ones
+  with write actions, stay callable unless denied. The adapter therefore
+  combines `--permission-mode dontAsk` with explicit `--deny` rules.
+- Grok Build streaming-json emits `available_commands`, a series of `text`
+  fragments, `usage`, and a final `end` with `stopReason: end_turn` and a
+  `usage` object. The reply is the concatenated `text` data.
+- Codex CLI 0.171.0 emits the same event sequence as 0.170.0.
+- Claude Code 2.1.329 on an account without headless allowance exits 1 with
+  a result envelope where `is_error` is true and `api_error_status` is 429.
+  Firstchair reports `rate_limited`. A successful 2.1.329 reply on this host
+  is still unverified, so the Claude success path relies on the documented
+  envelope.
+
 The following versions were present during local discovery. The workflow
 currently accepts the bundled synthetic provider. The live-provider commands
 below are candidates for future adapters.
@@ -14,16 +51,31 @@ For alpha, test supported event versions, terminal result detection, timeout
 and cancellation, authentication failure and unknown usage with fixtures.
 Treat provider output as data. Keep executable selection, working directory,
 permissions and budget in controller-owned policy. Each current subprocess
-invocation uses a fresh `triadmux-workspace-*` directory and does not inherit
+invocation uses a fresh `firstchair-workspace-*` directory and does not inherit
 the controller cwd. The child environment is an allowlist: interpreter and
-loader paths, locale, and `TRIADMUX_TEST_*`. API keys and `HOME` are not
+loader paths, locale, and `FIRSTCHAIR_TEST_*`. API keys and `HOME` are not
 passed. Saved run records replace values of environment names containing
 `SECRET`, `TOKEN`, `PASSWORD`, `CREDENTIAL`, `API_KEY`, or `_KEY` when the
 value is at least 12 characters. The replacement text is `[redacted]`.
 POSIX timeout kills that process group. This check uses
 a synthetic process tree. It does not launch Codex, Claude Code, or Grok.
 
-## Candidate result parsing
+## Result parsing
+
+The parsers return a common `Reply(text, usage)`. The version gate distinguishes
+verified versions from compatible releases. It rejects other versions and
+prerelease strings with `unsupported_provider_version`.
+
+| Provider | Verified versions | Accepted range |
+| --- | --- | --- |
+| Codex CLI | 0.170.0, 0.171.0 | 0.170.0 inclusive to 0.180.0 exclusive |
+| Claude Code | 2.1.328, 2.1.329 | 2.1.328 inclusive to 2.2.0 exclusive |
+| Grok Build | 1.0.77 | 1.0.77 inclusive to 1.1.0 exclusive |
+
+Measured usage requires both input and output counts and at least one nonzero
+count. Missing, incomplete, or all-zero usage is recorded as unknown. Reported
+counts used by the parser must be integers from zero through 2⁶³ − 1.
+Malformed usage fails closed. Token counts alone do not establish a billable amount.
 
 ### Codex CLI 0.170.0
 
@@ -32,8 +84,8 @@ The candidate command is `codex --ask-for-approval never exec --ephemeral
 selects stdin for the prompt. The pinned source defines response text in
 `item.completed` events containing an `agent_message` item, turn usage in
 `turn.completed`, and failure in `turn.failed` or a top-level `error`
-event. A future adapter should require a complete successful turn and a
-successful process exit before accepting the response. The smoke checker
+event. The parser requires a complete successful turn and a successful
+process exit, then returns the last completed agent message with turn usage. The smoke checker
 only looks for its marker in a completed agent message. Verify inherited
 configuration and tool availability before launching unattended work.
 [0.170.0 CLI arguments](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/exec/src/cli.rs) ·
@@ -61,15 +113,12 @@ release](https://github.com/anthropics/claude-code/releases/tag/v2.1.328) ·
 [Headless output](https://code.claude.com/docs/en/headless#get-structured-output) ·
 [CLI flags](https://code.claude.com/docs/en/cli-reference)
 
-The standalone parser gates on 2.1.328 and a successful exit. It requires
-one UTF-8 JSON object with an explicit success subtype, `is_error: false`
-and a nonblank `result` string. The [Agent SDK final result
-reference](https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage)
-documents the status fields. The public 2.1.328 release notes do not pin
-the full JSON envelope, and the host smoke checker only verifies the
-result type and marker. The candidate shape below is an invented fixture.
-Before enabling an adapter, verify these fields against a sanitized
-2.1.328 response. Structured output and usage remain outside this parser.
+The parser requires one UTF-8 result object with an explicit success subtype,
+`is_error: false`, and a nonblank `result` string. It reads input and output
+token counts from the result's `usage` object. When `is_error` is true, API status
+429 maps to `rate_limited` and 401 or 403 maps to `authorization_failed`, even on a
+failed process exit. Other failed exits map to `provider_exit`. An invented
+success fixture follows.
 
 ```json
 {"type":"result","subtype":"success","is_error":false,"result":"Synthetic reply"}
@@ -79,31 +128,24 @@ Before enabling an adapter, verify these fields against a sanitized
 
 The host evidence establishes newline-delimited JSON framing for
 `grok --no-auto-update -p TASK --output-format streaming-json`.
-The bundled 1.0.77 user guide describes each line as one JSON object with a
-string `type` and says the event-type list is non-exhaustive. It documents
-`text`, `usage`, and `end`. The offline validator checks type-tagged
-newline-delimited JSON and nothing else. It does not read a worker reply,
-usage counts, or a tool-denial outcome.
-
-TriadMux does not treat those guide fields as a worker result until a
-sanitized host capture confirms them. Unattended tool denial and sandbox
-scope stay unverified. The live adapter stays disabled. The current smoke
-command still uses `--output-format plain` for the final reply check.
+Each line in a reply stream must be a JSON object with a nonblank string
+`type`. The parser ignores unfamiliar event types and joins the string `data`
+from each `text` event in order. It requires one final `end` with
+`stopReason: "end_turn"` and a nonblank reply. An `error` event or a different
+stop reason fails the turn. Usage comes from the final event, falling back to
+the last `usage` event when the final event omits the field. The framing-only
+validator still reports event counts and types for version 1.0.77.
 [Headless output modes](https://docs.x.ai/build/cli/headless-scripting) ·
 [Permissions](https://docs.x.ai/build/features/permissions)
 
-Invented framing example. This is not a host capture:
+Invented success stream.
 
 ```jsonl
 {"type":"probe","id":"fixture-0001","unused":true}
-{"type":"text","data":"Invented fragment"}
-{"type":"end","stopReason":"end_turn"}
+{"type":"text","data":"Invented "}
+{"type":"text","data":"reply"}
+{"type":"end","stopReason":"end_turn","usage":{"input_tokens":10,"output_tokens":3}}
 ```
-
-For all candidates, reject unverified CLI versions before launching work.
-Provider-reported token counts can inform usage reporting. Record usage as
-unknown when the supported event stream omits it. A provider's token count
-does not establish a billable amount.
 
 ## Claude Swap alpha decision
 
@@ -134,7 +176,7 @@ prompt and requested structured output. No provider returned a result.
 | Claude Code | The headless process timed out after 55 seconds without output. |
 | Grok Build | The Linux sandbox refused to start because it could not create a required bubblewrap placeholder. |
 
-The local TriadMux CLI suite still passed, including both the in-process demo
+The local Firstchair CLI suite still passed, including both the in-process demo
 and synthetic subprocess workflow. A successful provider response remains
 necessary to verify authentication and collect a sanitized event fixture.
 
@@ -146,7 +188,7 @@ python3 scripts/live-smoke.py
 ```
 
 The checks run in temporary working directories and print only their
-outcomes. It saves those same outcomes to `.triadmux/live-smoke.json` and
+outcomes. It saves those same outcomes to `.firstchair/live-smoke.json` and
 exits with status 1 if any check fails. Use `--report PATH` to save elsewhere.
 
 ## Host-terminal results
@@ -159,5 +201,5 @@ uses [Grok's plain output mode](https://docs.x.ai/build/cli/headless-scripting)
 to check the final text separately from its streaming contract.
 
 ```sh
-python3 scripts/live-smoke.py --provider "Grok Build" --report .triadmux/grok-smoke.json
+python3 scripts/live-smoke.py --provider "Grok Build" --report .firstchair/grok-smoke.json
 ```
