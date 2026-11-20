@@ -1,7 +1,9 @@
-"""Parse the candidate Claude Code 2.1.328 headless text result envelope."""
+"""Parse the Claude Code headless text result envelope."""
 
 from .provider import ProviderError
 from .strict_json import load_json
+from .usage import Reply, parse_usage
+from .versions import check_version
 
 SUPPORTED_VERSION = "2.1.328"
 ERROR_SUBTYPES = (
@@ -12,18 +14,25 @@ ERROR_SUBTYPES = (
 )
 
 
-def parse_claude_json(output: bytes, *, version: str, returncode: int) -> str:
-    """Extract text from the already bounded stdout of one JSON-mode run."""
-    if version != SUPPORTED_VERSION:
-        raise ProviderError("unsupported_provider_version")
-    if returncode != 0:
-        raise ProviderError("provider_exit")
+def parse_claude_json(output: bytes, *, version: str, returncode: int) -> Reply:
+    """Extract a reply from the already bounded stdout of one JSON-mode run."""
+    check_version("claude", version)
+    invalid_result = "provider_exit" if returncode != 0 else "malformed_response"
     try:
         result = load_json(output.decode("utf-8"))
     except (ValueError, RecursionError):
-        raise ProviderError("malformed_response") from None
+        raise ProviderError(invalid_result) from None
     if not isinstance(result, dict) or result.get("type") != "result":
-        raise ProviderError("malformed_response")
+        raise ProviderError(invalid_result)
+
+    if result.get("is_error") is True:
+        status = result.get("api_error_status")
+        if status == 429:
+            raise ProviderError("rate_limited")
+        if status in (401, 403):
+            raise ProviderError("authorization_failed")
+    if returncode != 0:
+        raise ProviderError("provider_exit")
 
     subtype = result.get("subtype")
     is_error = result.get("is_error")
@@ -37,4 +46,4 @@ def parse_claude_json(output: bytes, *, version: str, returncode: int) -> str:
     text = result.get("result")
     if not isinstance(text, str) or not text.strip():
         raise ProviderError("malformed_response")
-    return text
+    return Reply(text, parse_usage(result))

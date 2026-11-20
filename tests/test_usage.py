@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from uuid import uuid4
 
+from firstchair.usage import Usage
+
 
 class UsageTests(unittest.TestCase):
     def test_offline_runs_persist_unknown_token_usage(self):
@@ -53,3 +55,13 @@ class UsageTests(unittest.TestCase):
             )
             self.assertEqual(json.loads(status.stdout), legacy)
             self.assertEqual(path.read_text(encoding="utf-8"), encoded)
+
+    def test_serializes_usage(self):
+        self.assertEqual(
+            Usage().as_record(),
+            {"provenance": "unknown", "input_tokens": None, "output_tokens": None},
+        )
+        self.assertEqual(
+            Usage("measured", 4, 0).as_record(),
+            {"provenance": "measured", "input_tokens": 4, "output_tokens": 0},
+        )

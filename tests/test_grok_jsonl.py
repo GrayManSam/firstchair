@@ -2,8 +2,9 @@ import json
 import unittest
 from dataclasses import asdict, fields
 
-from firstchair.grok_jsonl import GrokFrame, validate_grok_jsonl
+from firstchair.grok_jsonl import GrokFrame, parse_grok_jsonl, validate_grok_jsonl
 from firstchair.provider import ProviderError
+from firstchair.usage import Reply, Usage
 
 PROBE = {"type": "probe", "id": "fixture-0001", "unused": True}
 TEXT = {"type": "text", "data": "Invented fragment", "usage": {"input_tokens": 4}}
@@ -81,3 +82,46 @@ class GrokJsonlTests(unittest.TestCase):
             validate_grok_jsonl(output, version="1.0.78", returncode=0)
         with self.assertRaisesRegex(ProviderError, "^provider_exit$"):
             validate_grok_jsonl(output, version="1.0.77", returncode=1)
+
+
+class GrokReplyTests(unittest.TestCase):
+    def test_joins_fragments_and_prefers_end_usage(self):
+        counts = {"input_tokens": 4, "output_tokens": 2}
+        output = response(
+            PROBE, TEXT, UNKNOWN, {"type": "text", "data": " two"},
+            {"type": "usage", "usage": {"input_tokens": 1, "output_tokens": 1}},
+            {**END, "usage": counts},
+        )
+        self.assertEqual(
+            parse_grok_jsonl(output, version="1.0.78", returncode=0),
+            Reply("Invented fragment two", Usage("measured", 4, 2)),
+        )
+
+    def test_falls_back_to_last_usage_event(self):
+        first = {"type": "usage", "usage": {"input_tokens": 4, "output_tokens": 2}}
+        last = {"type": "usage", "usage": {"input_tokens": 5, "output_tokens": 3}}
+        output = response(TEXT, first, last, END)
+        self.assertEqual(parse_grok_jsonl(output, version="1.0.77", returncode=0).usage,
+                         Usage("measured", 5, 3))
+
+    def test_rejects_invalid_streams(self):
+        cases = (
+            ((TEXT,), "malformed_response"),
+            ((TEXT, END, UNKNOWN), "malformed_response"),
+            ((TEXT, END, END), "malformed_response"),
+            ((TEXT, {**END, "stopReason": "max_turns"}), "provider_turn_failed"),
+            ((TEXT, ERROR, END), "provider_turn_failed"),
+            ((TEXT, END, ERROR), "provider_turn_failed"),
+            (({"type": "text", "data": 4}, END), "malformed_response"),
+            (({"type": "text", "data": " \t"}, END), "malformed_response"),
+            ((TEXT, {**END, "usage": None}), "malformed_response"),
+            ((TEXT, {**END, "usage": {"input_tokens": True}}), "malformed_response"),
+        )
+        for events, reason in cases:
+            with self.subTest(events=events):
+                with self.assertRaisesRegex(ProviderError, f"^{reason}$"):
+                    parse_grok_jsonl(response(*events), version="1.0.77", returncode=0)
+
+    def test_rejects_blank_lines(self):
+        with self.assertRaisesRegex(ProviderError, "^malformed_response$"):
+            parse_grok_jsonl(response(TEXT) + b"\n" + response(END), version="1.0.77", returncode=0)
