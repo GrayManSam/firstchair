@@ -21,7 +21,7 @@ from typing import Any
 from .accounts import CREDENTIAL_OVERRIDES, HOME_VARIABLE, account_environment, profile_home
 from .fallback import is_transient
 from .rotation import Rotation, account_key
-from .claude_json import parse_claude_json
+from .claude_json import parse_claude_stream_reply
 from .codex_jsonl import parse_codex_jsonl
 from .grok_jsonl import parse_grok_jsonl
 from .provider import ProviderError, _subprocess_environment, run_bounded
@@ -40,7 +40,7 @@ _LIVE_ENV_NAMES = frozenset({
 })
 _PARSERS: dict[str, Callable[..., Reply]] = {
     "codex": parse_codex_jsonl,
-    "claude": parse_claude_json,
+    "claude": parse_claude_stream_reply,
     "grok": parse_grok_jsonl,
 }
 
@@ -133,7 +133,9 @@ def build_command(provider: str, workspace: Path | None, prompt_file: Path) -> t
     if provider == "claude":
         tools = "Read,Grep,Glob" if workspace is not None else ""
         argv = (
-            "claude", "-p", "--output-format", "json", "--no-session-persistence",
+            # stream-json carries the same result envelope as json, plus the
+            # rate_limit_event that reports the account's real usage.
+            "claude", "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
             "--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
             "--tools", tools, "--permission-mode", "dontAsk",
         )
@@ -389,7 +391,7 @@ class LiveSession:
                 error = caught
                 continue
             if self.rotation is not None:
-                self.rotation.observe(seat, reply.usage, None)
+                self.rotation.observe(seat, reply.usage, None, reply.quota)
                 if candidates is not None:
                     self.selections[-1]["account"] = account_key(seat.provider, seat.profile)
             return self._record(stage, seat, reply)

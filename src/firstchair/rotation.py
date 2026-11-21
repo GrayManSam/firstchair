@@ -331,8 +331,13 @@ class Rotation:
         self.refresh([seat for seat in seats if seat.provider == preferred.provider])
         return rank(seats, preferred.provider, self.sticky, read_ledger(self.path), self.policy, self.clock())
 
-    def observe(self, seat: Seat, usage: Usage | None, error: str | None) -> None:
+    def observe(
+        self, seat: Seat, usage: Usage | None, error: str | None, quota: Quota | None = None,
+    ) -> None:
         key = account_key(seat.provider, seat.profile)
         record(self.path, key, self.policy, now=self.clock(), usage=usage, error=error)
+        if quota is not None:
+            # The provider reported real usage with the reply. No separate reading is needed.
+            store_quota(self.path, {key: quota})
         if error is None:
             self.sticky[seat.provider] = key
