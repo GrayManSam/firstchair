@@ -53,6 +53,16 @@ def legacy_main(argv: list[str] | None = None) -> int:
     return main(argv, prog="triadmux")
 
 
+def _fallback_seat(text: str) -> tuple[str, str | None]:
+    """Read --fallback PROVIDER or PROVIDER:PROFILE."""
+    name, separator, profile = text.partition(":")
+    if name not in LIVE_PROVIDERS or (separator and not profile):
+        raise argparse.ArgumentTypeError(
+            f"expected one of {', '.join(LIVE_PROVIDERS)}, optionally followed by :PROFILE"
+        )
+    return name, profile or None
+
+
 def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--version", action="version", version=__version__)
@@ -73,8 +83,8 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
     )
     run.add_argument("--reviewer", choices=LIVE_PROVIDERS, help="Live reviewer provider (default: the lead)")
     run.add_argument(
-        "--fallback", action="append", choices=LIVE_PROVIDERS, default=None,
-        help="Extra provider used when an earlier one is out of usage",
+        "--fallback", action="append", type=_fallback_seat, default=None, metavar="PROVIDER[:PROFILE]",
+        help="Extra provider, or a second named account, used when an earlier one is out of usage",
     )
     run.add_argument("--workspace", type=Path, help="Directory live providers may read (default: an empty temp dir)")
     run.add_argument("--profile", help="Named account profile for the lead (see firstchair auth)")
@@ -96,7 +106,9 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
     resume.add_argument("run_id")
     resume.add_argument("--provider", choices=LIVE_PROVIDERS, help="Provider to add when the saved ones are exhausted")
     resume.add_argument("--reviewer", choices=LIVE_PROVIDERS)
-    resume.add_argument("--fallback", action="append", choices=LIVE_PROVIDERS, default=None)
+    resume.add_argument(
+        "--fallback", action="append", type=_fallback_seat, default=None, metavar="PROVIDER[:PROFILE]",
+    )
     resume.add_argument(
         "--retry-exhausted", action="store_true",
         help="Try the providers this run retired again, for example after a limit reset",
@@ -192,8 +204,8 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
                         deadline,
                     )
                 extras = tuple(
-                    LiveProvider(name, limits, args.workspace, None, deadline)
-                    for name in (args.fallback or [])
+                    LiveProvider(name, limits, args.workspace, profile, deadline)
+                    for name, profile in (args.fallback or [])
                 )
                 session = LiveSession(lead, reviewer, extras)
                 if len(session.seats()) > 3:
@@ -369,7 +381,7 @@ def _resume(args: argparse.Namespace) -> dict[str, object]:
     session = _resume_session(args, record)
     spent = session.spent()
     for seat in session.seats():
-        if seat.provider in spent:
+        if (seat.provider, seat.profile) in spent:
             continue
         try:
             seat.prepare()
@@ -435,8 +447,7 @@ def _resume_session(args: argparse.Namespace, record: dict[str, object]) -> Live
         specs.append((args.provider, args.profile))
     if args.reviewer is not None:
         specs.append((args.reviewer, args.reviewer_profile))
-    for name in args.fallback or []:
-        specs.append((name, None))
+    specs.extend(args.fallback or [])
     unique: list[tuple[str, str | None]] = []
     seen: set[tuple[str, str | None]] = set()
     for spec in specs:

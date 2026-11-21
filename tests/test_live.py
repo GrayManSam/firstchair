@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import argparse
 
-from firstchair.cli import _print_text, _resume_session, main
+from firstchair.cli import _fallback_seat, _print_text, _resume_session, main
 from firstchair.live import LiveSession, build_command, live_environment
 from firstchair.provider import ProviderError
 from firstchair.usage import Reply, Usage
@@ -394,24 +394,37 @@ class _Seat:
 
 
 class LiveFailoverTests(unittest.TestCase):
-    def test_a_second_account_of_the_same_provider_does_not_take_over(self):
+    def test_second_account_finishes_when_the_first_is_out_of_usage(self):
         empty = _Seat("claude", "work", [ProviderError("rate_limited")])
         reserve = _Seat("claude", "personal", ["plan", "review", "result"])
-        other = _Seat("codex", replies=["plan", "review", "result"])
         session = LiveSession(empty, reserve)
-        with self.assertRaisesRegex(ProviderError, "^rate_limited$"):
-            session.plan("task")
+        self.assertEqual(session.plan("task"), "plan")
+        self.assertEqual(session.review("plan"), "review")
+        self.assertEqual(session.synthesize("review"), "result")
         self.assertEqual(len(empty.prompts), 1)
-        self.assertEqual(reserve.prompts, [])
+        self.assertEqual(len(reserve.prompts), 3)
         self.assertEqual(session.exhausted, [{
             "provider": "claude", "profile": "work", "error": "rate_limited", "stage": "plan",
         }])
-        # A different provider still takes over, and the second account stays retired.
-        empty = _Seat("claude", "work", [ProviderError("rate_limited")])
-        session = LiveSession(empty, reserve, (other,))
-        self.assertEqual(session.synthesize(session.review(session.plan("task"))), "result")
-        self.assertEqual(reserve.prompts, [])
-        self.assertEqual(len(other.prompts), 3)
+
+    def test_fallback_flag_names_a_provider_or_a_second_account(self):
+        self.assertEqual(_fallback_seat("codex"), ("codex", None))
+        self.assertEqual(_fallback_seat("claude:personal"), ("claude", "personal"))
+        for bad in ("gemini", "claude:", ":personal", ""):
+            with self.subTest(bad=bad), self.assertRaises(argparse.ArgumentTypeError):
+                _fallback_seat(bad)
+        args = argparse.Namespace(
+            timeout=None, max_output_bytes=None, max_input_bytes=None, total_timeout=None,
+            workspace=None, provider=None, profile=None, reviewer=None, reviewer_profile=None,
+            fallback=[("codex", "personal")], retry_exhausted=False,
+        )
+        roster = [{"provider": "codex", "profile": "work", "roles": ["lead", "reviewer"]}]
+        with patch("firstchair.live.profile_home", return_value=Path("/invented/home")):
+            resumed = _resume_session(args, {"task": "task", "roster": roster})
+        self.assertEqual(
+            [(seat.provider, seat.profile) for seat in resumed.seats()],
+            [("codex", "work"), ("codex", "personal")],
+        )
 
     def test_roster_records_roles_and_resume_keeps_them(self):
         lead, extra = _Seat("codex"), _Seat("grok")

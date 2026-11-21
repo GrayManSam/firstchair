@@ -17,10 +17,12 @@
   characters. The reply stays in memory. The board stores only the name.
 - `firstchair run` records its lead session. `resume` and `recover` are
   refused from a different session. `runs` shows each owner.
-- A provider that is out of usage is retired for the run together with any
-  other account of that provider. A run no longer moves to a second account
-  of the same provider. `firstchair resume --retry-exhausted` tries retired
-  providers again, for example after a limit reset.
+- A second account of the same provider is its own seat and takes over
+  when the first is out of usage. `--fallback PROVIDER:PROFILE` names one
+  directly. `firstchair resume --retry-exhausted` tries the skipped seats
+  again, for example after a limit reset.
+- The README is reorganized around what Firstchair is for, and the package
+  metadata gains keywords, classifiers, and project links.
 - The saved roster records which seat leads and which reviews, so a resumed
   run keeps the same roles. Providers named on resume are extra seats.
 - Removed the unused `fallback.run_stage` helper.

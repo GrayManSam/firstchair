@@ -272,9 +272,9 @@ class LiveSession:
 
     A seat that is out of usage, unavailable, or timed out is skipped. The
     next named seat finishes that stage and the ones that follow. One
-    remaining seat can do the whole run. Exhaustion retires the provider,
-    not only the account, so a run never moves to a second account of the
-    same provider to get past a limit.
+    remaining seat can do the whole run. A seat is one provider under one
+    sign-in, so a second account of the same provider that the user named
+    is a separate seat and can take over.
     """
 
     lead: LiveProvider
@@ -322,9 +322,9 @@ class LiveSession:
                 raise ValueError("invalid attempt count")
             self.attempted = attempted
 
-    def spent(self) -> set[object]:
-        """Providers retired for this run."""
-        return {item.get("provider") for item in self.exhausted}
+    def spent(self) -> set[tuple[object, object]]:
+        """Seats retired for this run, as (provider, profile)."""
+        return {(item.get("provider"), item.get("profile")) for item in self.exhausted}
 
     def roster(self) -> list[dict[str, object]]:
         """Each seat with the roles it holds, so a resume keeps the same roles."""
@@ -340,7 +340,7 @@ class LiveSession:
 
     def _available(self, preferred: LiveProvider) -> list[LiveProvider]:
         spent = self.spent()
-        available = [seat for seat in self.seats() if seat.provider not in spent]
+        available = [seat for seat in self.seats() if (seat.provider, seat.profile) not in spent]
         key = (preferred.provider, preferred.profile)
         return [seat for seat in available if (seat.provider, seat.profile) == key] + [
             seat for seat in available if (seat.provider, seat.profile) != key
@@ -353,8 +353,6 @@ class LiveSession:
             raise ProviderError(str(code))
         error: ProviderError | None = None
         for seat in seats:
-            if seat.provider in self.spent():
-                continue  # Retired by an earlier seat in this same stage.
             self.attempted += 1
             try:
                 reply = seat.ask(prompt)
