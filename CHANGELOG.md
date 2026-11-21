@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+- The primary seat can run a score with `firstchair conduct`. Seat `self`
+  starts that seat's own provider. Seats `codex`, `claude`, and `grok` start
+  those CLIs. Parts run one at a time in isolated worktrees, and a failed
+  part leaves the rest unstarted. The saved board does not store task text
+  or replies.
+- `firstchair conduct run --limit N` runs up to N parts at once, from 1
+  through 4. A score can set a top-level `"limit"`, and the flag overrides
+  it. The default is still 1. Parts run in waves of N. After a wave with a
+  failed part, no later wave starts, and parts already running finish. The
+  summary and the board stay in input order.
+- A part can set `"after"` to the name of an earlier part. Its prompt then
+  includes that part's reply, marked as untrusted output and cut at 32,000
+  characters. The reply stays in memory. The board stores only the name.
+- `firstchair conduct cancel NAME` stops the running parts of a live score.
+  Those parts are recorded as `cancelled`, later parts as `not_started`, and
+  the conductor exits 2.
+- `firstchair conduct resume --name NAME --score FILE` continues a score
+  that has no live conductor. Completed parts are not run again. Read parts
+  that did not complete run again. A write part that left a worktree or
+  branch is refused until the lead runs `delegate finish`. A score lock
+  held by the conductor process shows whether it is still alive.
+- Claude Code can run as a delegated worker under `--restricted`. Read parts
+  use Read, Grep, and Glob. Write parts also use Edit and Write. Command
+  tools are not enabled. A reply is accepted only by the versioned parser.
+- `firstchair delegate run auto` can select Claude Code when the preferred
+  worker is not on PATH. `auto` still does not select the lead. Grok workers
+  still receive `--no-subagents`.
+- When a named provider is rate-limited, unavailable, or timed out,
+  Firstchair keeps the finished stages and continues with the next named
+  provider. One remaining provider can finish the run. `firstchair resume`
+  continues an interrupted run, or a run stopped because every named
+  provider was out of usage, from the last finished stage.
+- `firstchair doctor` checks Codex, Claude Code, and Grok Build together,
+  with at most three version probes in flight. `doctor --offline` still
+  only searches PATH.
+- Resume rejects a malformed exhausted seat, attempt count, or saved stage
+  instead of retrying a spent provider or continuing with a missing plan.
+  A stage failure is still written when usage details cannot be read.
+- Grok Build runs are started with `--deny run_terminal_command` as well as
+  the existing write and MCP denies. The installed Grok binary was not
+  re-run for this change.
+
 ## 0.1.0a2
 
 Fixes from the post-release review of the live adapters.

@@ -1,6 +1,6 @@
 # Provider contract inventory
 
-## Live read-only adapters (0.1.0a1)
+## Live read-only adapters
 
 `firstchair run --provider codex|claude|grok` uses the commands below. The
 controller checks `--version` first and accepts only a verified version or
@@ -26,7 +26,9 @@ Host findings on 2026-11-20 (Fedora 43):
 - Grok Build `--tools ""` still offers `run_terminal_command`, and `--tools`
   never removes MCP tools. A user's configured MCP servers, including ones
   with write actions, stay callable unless denied. The adapter therefore
-  combines `--permission-mode dontAsk` with explicit `--deny` rules.
+  combines `--permission-mode dontAsk` with explicit `--deny` rules, including
+  `--deny run_terminal_command`. The 2026-11-20 host note did not recheck
+  whether that deny name removes the tool.
 - Grok Build streaming-json emits `available_commands`, a series of `text`
   fragments, `usage`, and a final `end` with `stopReason: end_turn` and a
   `usage` object. The reply is the concatenated `text` data.
@@ -35,11 +37,40 @@ Host findings on 2026-11-20 (Fedora 43):
   a result envelope where `is_error` is true and `api_error_status` is 429.
   Firstchair reports `rate_limited`. A successful 2.1.329 reply on this host
   is still unverified, so the Claude success path relies on the documented
-  envelope.
+  envelope. `rate_limited`, `provider_unavailable`, and `provider_timeout`
+  retire that seat for the rest of the run. The next named provider, from
+  `--reviewer` or `--fallback`, finishes the current stage and any stage
+  that seat would have done. A single remaining provider completes the run.
+  `authorization_failed` and every other code stop the run. `firstchair resume`
+  continues from the last saved stage after an interrupt or after every
+  named provider was out of usage.
 
-The following versions were present during local discovery. The workflow
-currently accepts the bundled synthetic provider. The live-provider commands
-below are candidates for future adapters.
+## Maintainer delegation workers
+
+`firstchair delegate` and `firstchair conduct` launch worker CLIs in a git
+worktree. This is separate from `firstchair run`, which stays read-only.
+The Claude worker command was checked against `claude --help` on Claude Code
+2.1.330. No model prompt was sent for this check. Reply text is accepted
+only by `parse_claude_json` and the version gate in `versions.py`. A process
+exit of 0 with a rejected envelope is a failed part.
+
+| Provider | Worker command |
+| --- | --- |
+| Codex CLI | The existing delegate command: `exec --ephemeral`, `read-only` or `workspace-write`. |
+| Claude Code | `claude --restricted -p --output-format json --no-session-persistence --setting-sources "" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --tools TOOLS --permission-mode MODE --permission-prompts none` |
+| Grok Build | The existing delegate command, including `--no-subagents`. Seat `self` starts another Grok process. That process does not start its own subagents. |
+
+`TOOLS` is `Read,Grep,Glob` for a read part. A write part uses
+`Read,Grep,Glob,Edit,Write`. `MODE` is `dontAsk` for a read part and
+`acceptEdits` for a write part. `--restricted` on 2.1.330 removes command
+and WebFetch tools unless `--tools` names them, and confines file tools to
+the working directory. The controller sets that directory to the part's
+worktree and does not name Bash, PowerShell, or WebFetch.
+
+## Historical provider discovery
+
+The following observations predate the live adapters. Use the live
+read-only adapter table above for current supported commands and versions.
 
 | Provider | Observed version | Candidate headless contract |
 | --- | --- | --- |
@@ -150,7 +181,7 @@ Invented success stream.
 ## Claude Swap alpha decision
 
 Defer the optional Claude Swap bridge. The alpha workflow runs offline and
-has no live Claude Code adapter. Adding account status now would introduce
+had no live Claude Code adapter at the time of this decision. Adding account status then would have introduced
 provider state and potential usage refreshes without improving the
 synthetic workflow. The earlier [pinned source review](upstream-review.md)
 covers version 1.2.0b1. No Claude Swap invocation or synthetic installation

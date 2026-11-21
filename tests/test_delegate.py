@@ -293,6 +293,7 @@ class DelegateTests(unittest.TestCase):
         self.assertFalse(use_stdin)
         self.assertEqual(argv[argv.index("--sandbox") + 1], "workspace")
         self.assertIn("--disallowed-tools", argv)
+        self.assertIn("--no-subagents", argv)
 
 
 if __name__ == "__main__":

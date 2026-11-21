@@ -7,7 +7,7 @@
 - [x] Create and verify the independent public repository, initial branch and upstream tracking.
 - [x] Verify an installable package, version and help output, isolated tests and configuration defaults.
 - [x] Record upstream revision, license and reuse decision. Inventory repository-local instructions, skills and available integrations.
-- [ ] Run starter CI on GitHub and confirm release automation can build and verify distribution artifacts.
+- [x] Run starter CI on GitHub and confirm release automation can build and verify distribution artifacts.
 - [x] Require annotated public tags named `v` plus the package version, with changelog notes, before a GitHub Release.
 - [ ] Confirm default-branch protection and release permissions, then mark the baseline release.
 
@@ -40,7 +40,36 @@
 - [x] Defer optional Claude Swap support for alpha and document acceptance cases for a future bridge.
 - [x] Verify installed-package examples locally and add a release-wheel smoke check.
 - [x] Install the worktree dispatcher as `firstchair delegate` and verify live Codex and Grok read jobs on the development host.
-- [ ] Verify the hosted support matrix and publish the alpha prerelease.
+- [x] Verify the hosted support matrix and publish the alpha prerelease.
+
+## Conductor desk
+
+The primary seat, whether Claude Code, Codex, or Grok Build, is the conductor.
+It assigns parts, starts its own provider and the other two, and integrates.
+Workers do not commit. A Grok worker still cannot start its own subagents.
+The conductor starts another Grok process when the seat is `self`.
+
+- [x] Resolve a score before any process starts. `self` is the lead's provider.
+      `auto` stays on the other providers and can reach Claude Code when the
+      preferred worker is absent. A named seat must be on PATH.
+- [x] Run that score one part at a time in isolated worktrees. Record a board
+      without task text or replies. Leave later parts unstarted when one fails.
+- [x] Dispatch Claude Code as a restricted worker. Read parts get Read, Grep,
+      and Glob. Write parts also get Edit and Write. Command tools stay off.
+      A zero exit with a reply the versioned parser rejects is a failed part.
+- [x] Run independent parts together, at most four at a time.
+- [x] Let the conductor cancel the running part. `conduct cancel NAME` stops
+      the running parts of a live score and leaves later parts unstarted.
+- [x] Let the conductor send a follow-up part that can read the previous reply
+      without writing that reply into the saved board. A part names the
+      earlier part with `after`.
+- [x] Resume a score whose conductor process died, without replaying a part
+      that already completed. A write part that left a worktree or branch is
+      refused until the lead has reviewed and finished it.
+- [ ] Let a resumed follow-up part read an earlier reply. The reply is not
+      saved, so resume refuses that score today.
+- [ ] Run a real score with a limit above 1, a cancel, and a resume against
+      the installed provider CLIs. Coverage so far is synthetic.
 
 ## Beta and release
 

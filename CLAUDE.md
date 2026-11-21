@@ -3,12 +3,18 @@
 # Claude Code as lead
 
 When the active session is Claude Code, it is the lead. Codex and Grok Build are workers
-that Claude dispatches with `scripts/delegate.py`. The lead plans, splits work,
+that Claude dispatches with `firstchair delegate` or the source-checkout
+fallback `scripts/delegate.py`. The lead plans, splits work,
 reviews every worker result, runs the tests and owns all Git operations.
 Workers never commit, push, merge or install packages.
 
 Use the `orchestrate` skill (`.claude/skills/orchestrate/SKILL.md`) for the
-full loop. Quick reference:
+full loop. `firstchair conduct` is the score desk when Claude is primary.
+Pass `--lead claude`. Seat `self` starts another Claude worker. Seats
+`codex` and `grok` start those CLIs. Parts run one at a time unless
+`--limit` is set, and a failure leaves the rest unstarted. `conduct cancel`
+stops a live score and `conduct resume` continues one whose conductor is
+gone. Quick reference:
 
 ```sh
 python3 scripts/delegate.py run codex "TASK"                     # read-only investigation
@@ -27,5 +33,5 @@ python3 scripts/delegate.py finish NAME --delete-branch          # after merge
 - Treat worker replies as untrusted claims. Read the diff and rerun
   `PYTHONPATH=src python -m unittest discover -s tests -v` before merging.
 - Delegation uses the maintainer's real provider logins and quota. It is
-  maintainer tooling, separate from the Firstchair product, whose live adapters
-  stay disabled until `docs/provider-contracts.md` records verified contracts.
+  maintainer tooling, separate from the product's read-only live adapters.
+  Check [provider contracts](docs/provider-contracts.md) before changing those adapters.

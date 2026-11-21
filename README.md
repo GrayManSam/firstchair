@@ -45,6 +45,7 @@ or unsupported. `doctor --offline` only searches PATH.
 | Option | Effect |
 | --- | --- |
 | `--reviewer codex\|claude\|grok` | Provider for the review stage |
+| `--fallback codex\|claude\|grok` | Extra provider used when an earlier one is out of usage. Repeat once for a third |
 | `--workspace DIR` | Directory providers may read. Without it they run in an empty temporary directory |
 | `--profile NAME`, `--reviewer-profile NAME` | Use a named sign-in from `firstchair auth login` |
 | `--timeout SECONDS` | Per-stage limit (default 600) |
@@ -64,8 +65,15 @@ token usage. Usage is `measured` when the provider reports counts, `partial`
 when only some stages did, and `unknown` otherwise. Token counts are not a
 bill.
 
-A Claude Code account without headless usage allowance fails with
-`rate_limited`. Unknown provider versions are refused before a run starts.
+A named provider that is out of usage (`rate_limited`), unavailable, or
+timed out is skipped. Firstchair keeps the stages already finished and
+gives the rest of the run to the next named provider, so two providers
+can become one and still finish. A login or authorization failure stops
+the run instead of switching providers. `firstchair resume RUN_ID`
+continues an interrupted run, or a run that stopped because every named
+provider was out of usage, from the last finished stage. Add `--provider`
+on resume to hand the remainder to a provider that still has usage.
+Unknown provider versions are refused before a run starts.
 
 ## Offline demo
 
@@ -138,17 +146,19 @@ See [the roadmap](ROADMAP.md) for alpha, beta and release gates and
 ## Multi-agent development
 
 Maintainers can lead development from Claude Code, Codex, or Grok Build.
-Codex and Grok Build can run as headless workers. The installed
-`firstchair delegate` command runs one bounded task per worker in a Git
-worktree outside the checkout. Read tasks use a disposable
-worktree. Write tasks keep branch `delegate/NAME` for review. See
-[the orchestration guide](docs/orchestration.md). Delegation
-uses your existing provider logins. Unlike `firstchair run`, write-mode
-delegation lets a worker edit files inside its worktree.
+The primary seat is the conductor. `firstchair conduct` runs a score that
+can start the lead's own provider and the other two. `firstchair delegate`
+still runs one bounded task. Each worker gets a Git worktree outside the
+checkout. Read tasks use a disposable worktree. Write tasks keep branch
+`delegate/NAME` for review. See [the orchestration guide](docs/orchestration.md).
+Delegation uses your existing provider logins. Unlike `firstchair run`,
+write-mode delegation lets a worker edit files inside its worktree.
 
 ```sh
 firstchair delegate run auto --lead codex --dry-run
 firstchair delegate run auto --lead codex --name parser-review "Review the parser tests"
+firstchair conduct plan --lead grok --score score.json
+firstchair conduct run --lead grok --name rehearsal --score score.json
 firstchair delegate list
 ```
 
