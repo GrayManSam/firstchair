@@ -26,6 +26,12 @@
   which is never saved. A follow-up of a completed write part is refused.
   A score lock held by the conductor process shows whether it is still
   alive.
+- A Grok write worker is refused unless the run passes `--allow-grok-write`.
+  That worker bypasses permission prompts and can run terminal commands with
+  network access. This applies to `delegate run` and to `conduct plan`,
+  `run`, and `resume`, for seat `grok` and for seat `self` under a Grok
+  lead. `auto` no longer selects Grok for a write task, so a Codex lead's
+  automatic write worker is now Claude Code only.
 - Claude Code can run as a delegated worker under `--restricted`. Read parts
   use Read, Grep, and Glob. Write parts also use Edit and Write. Command
   tools are not enabled. A reply is accepted only by the versioned parser.

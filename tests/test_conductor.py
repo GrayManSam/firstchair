@@ -212,7 +212,12 @@ class ConductorTests(unittest.TestCase):
             return "/fake/grok" if name == "grok" else None
 
         with mock.patch.object(delegate.shutil, "which", side_effect=only_grok):
-            self.assertEqual(delegate.resolve_seat("self", "grok", "write"), "grok")
+            self.assertEqual(delegate.resolve_seat("self", "grok", "read"), "grok")
+            with self.assertRaisesRegex(delegate.DelegateError, "allow-grok-write"):
+                delegate.resolve_seat("self", "grok", "write")
+            self.assertEqual(
+                delegate.resolve_seat("self", "grok", "write", allow_grok_write=True), "grok",
+            )
             with self.assertRaisesRegex(delegate.DelegateError, "codex is not on PATH"):
                 delegate.resolve_seat("codex", "grok", "read")
 
@@ -763,6 +768,26 @@ class ConductorTests(unittest.TestCase):
                 self.assertEqual(code, 2, output)
                 self.assertIn("error", error)
                 self.assertTrue((self.repo / ".firstchair" / "delegations" / "second").is_dir())
+
+    def test_grok_write_part_is_refused_without_the_explicit_flag(self):
+        for label, part, lead in (
+            ("named", self._part("edit", "grok", mode="write"), "claude"),
+            ("self", self._part("edit", "self", mode="write"), "grok"),
+        ):
+            with self.subTest(label=label):
+                score = self._score([self._part("first", "codex"), part], f"grok-{label}.json")
+                for command in (("plan",), ("run", "--name", "grok-write")):
+                    code, output, error = self._main(*command, "--lead", lead, "--score", score)
+                    self.assertEqual(code, 2, output)
+                    self.assertEqual(output, "")
+                    self.assertIn("--allow-grok-write", error)
+                    self._assert_nothing_started("grok-write")
+        code, output, error = self._main(
+            "run", "--lead", "grok", "--name", "grok-write", "--score", score, "--allow-grok-write",
+        )
+        self.assertEqual(code, 0, error)
+        self.assertIn("fake grok mode write", json.loads(output)["parts"][1]["reply"])
+        self.assertEqual((self.repo / "README.md").read_text(), "invented project\n")
 
     def test_malformed_claude_reply_fails_closed(self):
         (self.bin / "claude").write_text(f"#!{sys.executable}\nimport sys\nprint('{{}}')\nsys.exit(0)\n")

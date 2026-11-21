@@ -6,12 +6,29 @@ requested, reviews the results, and integrates verified changes. Use the
 
 | Lead | Automatic read worker | Automatic write worker |
 | --- | --- | --- |
-| Claude Code | Grok Build, then Codex | Codex, then Grok Build |
-| Codex | Grok Build, then Claude Code | Grok Build, then Claude Code |
+| Claude Code | Grok Build, then Codex | Codex |
+| Codex | Grok Build, then Claude Code | Claude Code |
 | Grok Build | Codex, then Claude Code | Codex, then Claude Code |
 
 `auto` does not select the lead. `self` is the explicit request for the
 lead's own provider.
+
+### Grok write workers need an explicit flag
+
+A Codex write worker runs in Codex's `workspace-write` sandbox. A Claude
+write worker gets file tools only. A Grok write worker is started with
+`--permission-mode bypassPermissions` and `--sandbox workspace`. It can run
+terminal commands and reach the network, so the rule that workers do not
+push or merge is only an instruction to it. Firstchair therefore refuses a
+Grok write worker before a worktree is created. This covers seat `grok`
+and seat `self` under a Grok lead, in `delegate run` and in every `conduct`
+command. `auto` never selects Grok for a write task. Pass
+`--allow-grok-write` to accept the exposure for one invocation.
+
+A Grok read worker uses the same permission mode with its two edit tools
+removed. It can still run terminal commands and reach the network. The
+installed Grok CLI was not re-run for this change, and the read command is
+unchanged.
 
 Use `firstchair delegate run auto --lead codex --dry-run` to preview worker
 selection and timeout without starting a worker or creating a worktree.

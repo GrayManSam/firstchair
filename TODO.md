@@ -69,6 +69,10 @@ The conductor starts another Grok process when the seat is `self`.
 - [x] Let a resumed follow-up part read an earlier reply. The reply is not
       saved, so resume runs the earlier read part again. An earlier write
       part is not replayed, and resume refuses that score.
+- [x] Refuse a Grok write worker unless the run passes `--allow-grok-write`,
+      and keep Grok out of automatic write selection.
+- [ ] Give the Grok read worker the deny rules the live adapter uses, then
+      verify the command against the installed Grok CLI.
 - [ ] Run a real score with a limit above 1, a cancel, and a resume against
       the installed provider CLIs. Coverage so far is synthetic.
 

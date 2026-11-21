@@ -45,7 +45,7 @@ the parallel score story in `TODO.md` is implemented.
 # read: disposable detached worktree, removed afterwards
 python3 scripts/delegate.py run codex --name review-x "Review ... Report file:line findings."
 # write: worktree kept on branch delegate/NAME
-python3 scripts/delegate.py run grok --mode write --name docs-x --prompt-file /path/task.md
+python3 scripts/delegate.py run codex --mode write --name docs-x --prompt-file /path/task.md
 ```
 
 - Run each dispatch with Bash `run_in_background: true` and launch independent

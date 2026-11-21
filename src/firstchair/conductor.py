@@ -155,7 +155,9 @@ def _timeout(part: Part) -> float:
     return part.timeout
 
 
-def plan_score(lead: str, parts: tuple[Part, ...]) -> dict[str, object]:
+def plan_score(
+    lead: str, parts: tuple[Part, ...], *, allow_grok_write: bool = False,
+) -> dict[str, object]:
     """Resolve every seat without creating a worktree or a board."""
     if lead not in LEAD_NAMES:
         raise DelegateError(f"unknown lead {lead}")
@@ -166,7 +168,7 @@ def plan_score(lead: str, parts: tuple[Part, ...]) -> dict[str, object]:
         item: dict[str, object] = {
             "name": part.name,
             "seat": part.seat,
-            "provider": resolve_seat(part.seat, lead, part.mode),
+            "provider": resolve_seat(part.seat, lead, part.mode, allow_grok_write=allow_grok_write),
             "mode": part.mode,
             "timeout_seconds": _timeout(part),
             "task_bytes": len(part.task.encode("utf-8")),
@@ -277,6 +279,7 @@ TERMINATED = "terminated by SIGTERM; worker stopped"
 def _launch_part(
     repo: Path, lead: str, part: Part, with_changes: bool,
     stop: threading.Event | None, setup_lock: threading.Lock | None,
+    allow_grok_write: bool = False,
 ) -> tuple[int, dict[str, object] | None, str | None]:
     """Run one part and always return (exit code, summary, error).
 
@@ -287,6 +290,7 @@ def _launch_part(
         repo=str(repo), provider=part.seat, lead=lead, task=part.task, prompt_file=None,
         mode=part.mode, name=part.name, timeout=part.timeout, profile=None, model=None,
         effort=None, dry_run=False, keep=False, with_changes=with_changes,
+        allow_grok_write=allow_grok_write,
     )
     try:
         code, summary = launch_job(namespace, stop=stop, setup_lock=setup_lock)
@@ -301,7 +305,7 @@ def _launch_part(
 
 def run_score(
     repo: Path, lead: str, name: str, parts: tuple[Part, ...], *,
-    with_changes: bool = False, limit: int = 1,
+    with_changes: bool = False, limit: int = 1, allow_grok_write: bool = False,
 ) -> tuple[int, dict[str, object]]:
     """Run parts in input order, ``limit`` at a time.
 
@@ -310,7 +314,7 @@ def run_score(
     """
     name = check_name(name)
     limit = check_limit(limit)
-    planned = plan_score(lead, parts)
+    planned = plan_score(lead, parts, allow_grok_write=allow_grok_write)
     path = board_path(repo, name)
     if path.parent.exists():
         raise DelegateError(f"score {name} already exists")
@@ -331,7 +335,7 @@ def run_score(
     try:
         path.parent.mkdir(parents=True, mode=0o700)
         lock = _lock(path.parent)
-        return _perform(repo, lead, name, parts, rows, with_changes, limit)
+        return _perform(repo, lead, name, parts, rows, with_changes, limit, allow_grok_write)
     finally:
         if lock is not None:
             lock.close()
@@ -340,7 +344,7 @@ def run_score(
 
 def resume_score(
     repo: Path, name: str, parts: tuple[Part, ...], *,
-    with_changes: bool = False, limit: int = 1,
+    with_changes: bool = False, limit: int = 1, allow_grok_write: bool = False,
 ) -> tuple[int, dict[str, object]]:
     """Continue a score that has no live conductor.
 
@@ -370,7 +374,7 @@ def resume_score(
             raise DelegateError(f"score file does not match the saved parts of {name}")
     if all(row["status"] == "completed" for row in saved):
         raise DelegateError(f"score {name} is already completed")
-    planned = plan_score(lead, parts)["parts"]
+    planned = plan_score(lead, parts, allow_grok_write=allow_grok_write)["parts"]
     assert isinstance(planned, list)
     unfinished = {index for index, row in enumerate(saved) if row["status"] != "completed"}
     # A reply is never saved. A completed read part runs again when an
@@ -408,7 +412,7 @@ def resume_score(
         rows: list[dict[str, object]] = []
         for index, row in enumerate(saved):
             rows.append(dict(row) if index not in pending else _row(planned[index], "queued"))
-        return _perform(repo, lead, name, parts, rows, with_changes, limit)
+        return _perform(repo, lead, name, parts, rows, with_changes, limit, allow_grok_write)
     finally:
         if lock is not None:
             lock.close()
@@ -417,7 +421,7 @@ def resume_score(
 
 def _perform(
     repo: Path, lead: str, name: str, parts: tuple[Part, ...], rows: list[dict[str, object]],
-    with_changes: bool, limit: int,
+    with_changes: bool, limit: int, allow_grok_write: bool = False,
 ) -> tuple[int, dict[str, object]]:
     """Run every part whose row is queued. The caller owns SIGTERM and the lock."""
     path = board_path(repo, name)
@@ -479,7 +483,7 @@ def _perform(
             if not reply:
                 return 1, None, f"part {part.after} returned no reply to read"
             part = _with_context(part, reply)
-        return _launch_part(repo, lead, part, with_changes, stop, setup_lock)
+        return _launch_part(repo, lead, part, with_changes, stop, setup_lock, allow_grok_write)
 
     def sequential() -> None:
         for index in pending:
@@ -615,7 +619,9 @@ def read_board(repo: Path, name: str) -> dict[str, object]:
 
 
 def _plan(args: argparse.Namespace) -> int:
-    planned = plan_score(args.lead, load_score(Path(args.score)))
+    planned = plan_score(
+        args.lead, load_score(Path(args.score)), allow_grok_write=args.allow_grok_write,
+    )
     print(json.dumps(planned, indent=2))
     return 0
 
@@ -628,10 +634,12 @@ def _run(args: argparse.Namespace) -> int:
     if args.resume:
         code, printable = resume_score(
             repo, args.name, score.parts, with_changes=args.with_changes, limit=limit,
+            allow_grok_write=args.allow_grok_write,
         )
     else:
         code, printable = run_score(
             repo, args.lead, args.name, score.parts, with_changes=args.with_changes, limit=limit,
+            allow_grok_write=args.allow_grok_write,
         )
     redact_record(printable)
     print(json.dumps(printable, indent=2))
@@ -658,6 +666,10 @@ def configure_parser(root: argparse.ArgumentParser) -> None:
     plan = commands.add_parser("plan", help="Resolve a score without starting workers")
     plan.add_argument("--lead", choices=LEAD_NAMES, required=True, help="Primary seat running this score")
     plan.add_argument("--score", required=True, help="JSON score file")
+    plan.add_argument(
+        "--allow-grok-write", action="store_true",
+        help="Accept Grok write parts, which have terminal commands and network access",
+    )
     plan.set_defaults(handler=_plan)
 
     run = commands.add_parser("run", help="Run a score, one part at a time unless a limit is set")
@@ -673,6 +685,10 @@ def configure_parser(root: argparse.ArgumentParser) -> None:
         "--with-changes", action="store_true",
         help="Copy the checkout's uncommitted and untracked files into each part",
     )
+    run.add_argument(
+        "--allow-grok-write", action="store_true",
+        help="Accept Grok write parts, which have terminal commands and network access",
+    )
     run.set_defaults(handler=_run, resume=False)
 
     resume = commands.add_parser(
@@ -687,6 +703,10 @@ def configure_parser(root: argparse.ArgumentParser) -> None:
     resume.add_argument(
         "--with-changes", action="store_true",
         help="Copy the checkout's uncommitted and untracked files into each part",
+    )
+    resume.add_argument(
+        "--allow-grok-write", action="store_true",
+        help="Accept Grok write parts, which have terminal commands and network access",
     )
     resume.set_defaults(handler=_run, resume=True)
 

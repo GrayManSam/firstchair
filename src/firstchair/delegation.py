@@ -43,11 +43,16 @@ PROVIDERS = ("codex", "claude", "grok")
 LEAD_NAMES = {"claude": "Claude Code", "codex": "Codex", "grok": "Grok Build"}
 # auto never selects the lead. self is the explicit request for the lead's own provider.
 WORKER_ORDER = {
-    "claude": {"read": ("grok", "codex"), "write": ("codex", "grok")},
-    "codex": {"read": ("grok", "claude"), "write": ("grok", "claude")},
+    # Automatic write selection never picks Grok. See GROK_WRITE_REFUSAL.
+    "claude": {"read": ("grok", "codex"), "write": ("codex",)},
+    "codex": {"read": ("grok", "claude"), "write": ("claude",)},
     "grok": {"read": ("codex", "claude"), "write": ("codex", "claude")},
 }
 MODES = ("read", "write")
+GROK_WRITE_REFUSAL = (
+    "a Grok write worker runs with permission prompts bypassed, terminal commands and "
+    "network access; pass --allow-grok-write to accept that for this run"
+)
 BRANCH_PREFIX = "delegate/"
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 DEFAULT_TIMEOUT = {"read": 600, "write": 1800}
@@ -404,17 +409,24 @@ def select_worker(provider: str, lead: str, mode: str) -> str:
     raise DelegateError(f"no eligible {mode} worker for {LEAD_NAMES[lead]} is on PATH")
 
 
-def resolve_seat(seat: str, lead: str, mode: str) -> str:
-    """Resolve a conductor seat. ``self`` is the lead's own provider."""
+def resolve_seat(seat: str, lead: str, mode: str, *, allow_grok_write: bool = False) -> str:
+    """Resolve a conductor seat. ``self`` is the lead's own provider.
+
+    A Grok write worker is refused unless the caller opted in for this run.
+    """
     if seat == "self":
         if lead not in LEAD_NAMES:
             raise DelegateError(f"unknown lead {lead}")
         if shutil.which(lead) is None:
             raise DelegateError(f"{lead} is not on PATH")
-        return lead
-    if seat not in {*PROVIDERS, "auto"}:
+        provider = lead
+    elif seat not in {*PROVIDERS, "auto"}:
         raise DelegateError(f"unknown seat {seat}")
-    return select_worker(seat, lead, mode)
+    else:
+        provider = select_worker(seat, lead, mode)
+    if provider == "grok" and mode == "write" and allow_grok_write is not True:
+        raise DelegateError(GROK_WRITE_REFUSAL)
+    return provider
 
 
 def _resolve(args: argparse.Namespace) -> tuple[Path, str, dict[str, str] | None, str, float]:
@@ -423,7 +435,10 @@ def _resolve(args: argparse.Namespace) -> tuple[Path, str, dict[str, str] | None
         raise DelegateError("--model and --effort require an explicit worker")
     if args.profile is not None and args.provider in {"auto", "self"}:
         raise DelegateError("--profile requires an explicit worker")
-    provider = resolve_seat(args.provider, args.lead, args.mode)
+    provider = resolve_seat(
+        args.provider, args.lead, args.mode,
+        allow_grok_write=getattr(args, "allow_grok_write", False),
+    )
     env = account_environment(provider, args.profile) if args.profile is not None else None
     name = check_name(args.name or default_name(provider))
     timeout = DEFAULT_TIMEOUT[args.mode] if args.timeout is None else args.timeout
@@ -680,6 +695,10 @@ def configure_parser(root: argparse.ArgumentParser) -> None:
     run.add_argument("--effort", help="Provider reasoning effort override")
     run.add_argument("--dry-run", action="store_true", help="Show the selection without launching a worker")
     run.add_argument("--keep", action="store_true", help="Keep a read task's worktree")
+    run.add_argument(
+        "--allow-grok-write", action="store_true",
+        help="Accept a Grok write worker, which has terminal commands and network access",
+    )
     run.add_argument(
         "--with-changes", action="store_true",
         help="Copy the checkout's uncommitted and untracked files into the worktree",

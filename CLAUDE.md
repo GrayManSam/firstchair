@@ -18,7 +18,7 @@ gone. Quick reference:
 
 ```sh
 python3 scripts/delegate.py run codex "TASK"                     # read-only investigation
-python3 scripts/delegate.py run grok --mode write --name NAME "TASK"  # edits on branch delegate/NAME
+python3 scripts/delegate.py run codex --mode write --name NAME "TASK"  # edits on branch delegate/NAME
 python3 scripts/delegate.py list
 python3 scripts/delegate.py collect NAME                         # commit worker edits on its branch
 python3 scripts/delegate.py finish NAME --delete-branch          # after merge
@@ -26,6 +26,9 @@ python3 scripts/delegate.py finish NAME --delete-branch          # after merge
 
 - Worktrees start from `HEAD`. Commit first, or pass `--with-changes` to carry
   uncommitted and untracked files into the worker's worktree.
+- Grok is a read worker. A Grok write worker has terminal commands and
+  network access, so it is refused unless the user asks for it and the run
+  passes `--allow-grok-write`.
 - Run long tasks with `run_in_background` and dispatch independent tasks in
   parallel. Give each a distinct `--name`.
 - The script prints one JSON summary: `status`, `reply`, `changes`, `branch`,
