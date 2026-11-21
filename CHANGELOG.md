@@ -21,8 +21,11 @@
 - `firstchair conduct resume --name NAME --score FILE` continues a score
   that has no live conductor. Completed parts are not run again. Read parts
   that did not complete run again. A write part that left a worktree or
-  branch is refused until the lead runs `delegate finish`. A score lock
-  held by the conductor process shows whether it is still alive.
+  branch is refused until the lead runs `delegate finish`. A completed
+  read part runs again only when an unfinished follow-up needs its reply,
+  which is never saved. A follow-up of a completed write part is refused.
+  A score lock held by the conductor process shows whether it is still
+  alive.
 - Claude Code can run as a delegated worker under `--restricted`. Read parts
   use Read, Grep, and Glob. Write parts also use Edit and Write. Command
   tools are not enabled. A reply is accepted only by the versioned parser.

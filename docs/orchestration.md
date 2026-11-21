@@ -109,16 +109,18 @@ The board has no task text, so pass the score file again. Its parts must
 match the saved names, seats, modes, and `after` names in order. The lead
 comes from the board. Task text is not compared.
 
-- A completed part is not run again.
+- A completed part is not run again, with one exception below.
 - A read part that did not complete runs again. Its leftover worktree and
   log directory are removed first.
 - A write part that did not complete and left a worktree or branch is
   refused, and nothing is changed. Review the worktree. Then run
   `firstchair delegate finish NAME --delete-branch`, with `--force` to
   discard its edits, and resume again.
-- A follow-up part cannot resume after its earlier part completed in a
-  previous run, because that reply was not saved. Start a new score for the
-  remaining parts.
+- Replies are not saved. When an unfinished follow-up part needs the reply
+  of a completed read part, that read part runs again first. This uses the
+  provider again for work that had finished.
+- A completed write part is never replayed. A follow-up of a completed
+  write part is refused. Start a new score for the remaining parts.
 
 A worker process whose conductor was killed can keep running in its own
 process group until its provider exits. Check for it before resuming a

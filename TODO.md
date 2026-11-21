@@ -66,8 +66,9 @@ The conductor starts another Grok process when the seat is `self`.
 - [x] Resume a score whose conductor process died, without replaying a part
       that already completed. A write part that left a worktree or branch is
       refused until the lead has reviewed and finished it.
-- [ ] Let a resumed follow-up part read an earlier reply. The reply is not
-      saved, so resume refuses that score today.
+- [x] Let a resumed follow-up part read an earlier reply. The reply is not
+      saved, so resume runs the earlier read part again. An earlier write
+      part is not replayed, and resume refuses that score.
 - [ ] Run a real score with a limit above 1, a cancel, and a resume against
       the installed provider CLIs. Coverage so far is synthetic.
 

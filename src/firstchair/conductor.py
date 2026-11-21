@@ -227,8 +227,9 @@ def _check_after(parts: tuple[Part, ...], waves: list[list[int]]) -> None:
             raise DelegateError(f"after in part {parts[index].name} must name an earlier part")
         if source not in wave_of:
             raise DelegateError(
-                f"part {parts[index].name} reads the reply of {earlier}, which completed in an "
-                "earlier run and was not saved; start a new score for the remaining parts"
+                f"part {parts[index].name} reads the reply of write part {earlier}, which "
+                "completed in an earlier run and was not saved; start a new score for the "
+                "remaining parts"
             )
         if wave_of[source] >= number:
             raise DelegateError(
@@ -343,10 +344,11 @@ def resume_score(
 ) -> tuple[int, dict[str, object]]:
     """Continue a score that has no live conductor.
 
-    Completed parts are not run again. The board has no task text, so the
-    caller passes the score again and it must name the same parts. A read
-    part that did not complete is run again. A write part that left a
-    worktree or branch behind is refused until the lead has dealt with it.
+    Completed parts are not run again, except a read part whose reply an
+    unfinished follow-up needs. The board has no task text, so the caller
+    passes the score again and it must name the same parts. A read part
+    that did not complete is run again. A write part that left a worktree
+    or branch behind is refused until the lead has dealt with it.
     """
     name = check_name(name)
     limit = check_limit(limit)
@@ -370,7 +372,15 @@ def resume_score(
         raise DelegateError(f"score {name} is already completed")
     planned = plan_score(lead, parts)["parts"]
     assert isinstance(planned, list)
-    pending = [index for index, row in enumerate(saved) if row["status"] != "completed"]
+    unfinished = {index for index, row in enumerate(saved) if row["status"] != "completed"}
+    # A reply is never saved. A completed read part runs again when an
+    # unfinished follow-up needs its reply. A write part is not replayed.
+    index_of = {part.name: index for index, part in enumerate(parts)}
+    for index in range(len(parts) - 1, -1, -1):
+        source = index_of.get(parts[index].after or "")
+        if index in unfinished and source is not None and parts[source].mode == "read":
+            unfinished.add(source)
+    pending = sorted(unfinished)
     _check_after(parts, _waves(pending, limit))
     path = board_path(repo, name)
     previous = signal.signal(signal.SIGTERM, _on_sigterm)

@@ -699,8 +699,43 @@ class ConductorTests(unittest.TestCase):
         self.assertEqual([part["status"] for part in json.loads(output)["parts"]], ["completed", "completed"])
         self.assertTrue((worktree / "claude-edit.txt").exists())
 
-    def test_resume_refuses_a_follow_up_whose_earlier_reply_is_gone(self):
-        score = self._score([self._part("parser", "codex"), self._part("review", "claude", after="parser")])
+    def test_resume_reruns_a_read_part_whose_reply_a_follow_up_needs(self):
+        self._echo_grok()
+        stamps = self._stamps()
+        score = self._score([
+            self._part("other", "codex"),
+            self._part("parser", "codex"),
+            self._part("review", "grok", after="parser"),
+            self._part("verdict", "claude", after="review"),
+        ])
+        environment = {"FAKE_STAMP_DIR": str(stamps)}
+        with mock.patch.dict(os.environ, {**environment, "FAKE_CLAUDE_EXIT": "1"}):
+            code, _, error = self._main("run", "--lead", "claude", "--name", "chain", "--score", score)
+        self.assertEqual(code, 1, error)
+        self.assertEqual(
+            [part["status"] for part in self._board("chain")["parts"]],
+            ["completed", "completed", "completed", "failed"],
+        )
+        shutil.rmtree(stamps)
+        stamps.mkdir()
+        with mock.patch.dict(os.environ, environment):
+            code, output, error = self._main("resume", "--name", "chain", "--score", score)
+        self.assertEqual(code, 0, error)
+        parts = json.loads(output)["parts"]
+        self.assertEqual([part["status"] for part in parts], ["completed"] * 4)
+        # The whole read chain behind the failed part ran again. The unrelated part did not.
+        self.assertFalse((stamps / "other.start").exists())
+        self.assertTrue((stamps / "parser.start").exists())
+        self.assertIn("follow-up saw earlier reply: True", parts[2]["reply"])
+        self.assertIn("fake claude dontAsk saw", parts[3]["reply"])
+        board_text = (self.repo / ".firstchair" / "conduct" / "chain" / "board.json").read_text(encoding="utf-8")
+        self.assertNotIn("reply", board_text)
+        self.assertNotIn("fake codex saw", board_text)
+
+    def test_resume_refuses_a_follow_up_whose_earlier_write_reply_is_gone(self):
+        score = self._score([
+            self._part("parser", "codex", mode="write"), self._part("review", "claude", after="parser"),
+        ])
         with mock.patch.dict(os.environ, {"FAKE_CLAUDE_EXIT": "1"}):
             code, _, error = self._main("run", "--lead", "grok", "--name", "lost", "--score", score)
         self.assertEqual(code, 1, error)
@@ -710,6 +745,7 @@ class ConductorTests(unittest.TestCase):
         self.assertIn("was not saved", error)
         self.assertEqual(self._board("lost"), before)
         self.assertTrue((self.repo / ".firstchair" / "delegations" / "review").is_dir())
+        self.assertTrue((self.temp / "worktrees" / "repo" / "parser" / "added.txt").exists())
 
     def test_resume_refuses_a_malformed_board(self):
         score = self._score([self._part("first", "codex"), self._part("second", "claude")])
