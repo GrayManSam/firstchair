@@ -15,6 +15,9 @@
 - A part can set `"after"` to the name of an earlier part. Its prompt then
   includes that part's reply, marked as untrusted output and cut at 32,000
   characters. The reply stays in memory. The board stores only the name.
+- The board records when each part started and ended. While a score is
+  running, `conduct status` also reports whether a conductor still holds
+  the score lock and how long each running part has run.
 - `firstchair conduct cancel NAME` stops the running parts of a live score.
   Those parts are recorded as `cancelled`, later parts as `not_started`, and
   the conductor exits 2.

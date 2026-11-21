@@ -23,6 +23,7 @@ import signal
 import sys
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
 
@@ -269,6 +270,10 @@ def _lock(directory: Path) -> IO[str] | None:
     return handle
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def _cancel_file(directory: Path) -> Path:
     return directory / "cancel"
 
@@ -459,6 +464,7 @@ def _perform(
         code, summary, failure = outcome
         row = rows[index]
         codes[index] = code
+        row["ended_at"] = _now()
         if summary is None:
             row["status"] = "failed"
             row["error"] = failure or "worker failed"
@@ -489,7 +495,7 @@ def _perform(
         for index in pending:
             if stop.is_set():
                 return
-            rows[index]["status"] = "running"
+            rows[index].update(status="running", started_at=_now())
             checkpoint()
             launched.add(index)
             settle(index, launch(index, None))
@@ -506,7 +512,7 @@ def _perform(
                     if stop.is_set():
                         return
                     for index in wave:
-                        rows[index]["status"] = "running"
+                        rows[index].update(status="running", started_at=_now())
                     checkpoint()
                     futures.clear()
                     for index in wave:
@@ -652,9 +658,38 @@ def _cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _liveness(repo: Path, name: str) -> str:
+    """Say whether a conductor holds the lock of a score whose board says running."""
+    if fcntl is None:
+        return "unknown"
+    try:
+        free = _lock(board_path(repo, name).parent)
+    except DelegateError:
+        return "live"
+    except OSError:
+        return "unknown"
+    if free is not None:
+        free.close()
+    return "gone"
+
+
 def _status(args: argparse.Namespace) -> int:
     repo = repo_root(Path(args.repo or Path.cwd()))
     board = read_board(repo, args.name)
+    if board.get("status") == "running":
+        # Printed only. A dead conductor leaves "running" on the board forever,
+        # and a slow worker looks the same without the lock and the clock.
+        board["conductor"] = _liveness(repo, args.name)
+        now = datetime.now(timezone.utc)
+        parts = board.get("parts")
+        for row in parts if isinstance(parts, list) else []:
+            if not isinstance(row, dict) or row.get("status") != "running":
+                continue
+            try:
+                started = datetime.fromisoformat(str(row.get("started_at")))
+                row["elapsed_seconds"] = max(0, round((now - started).total_seconds()))
+            except (TypeError, ValueError):
+                pass
     print(json.dumps(board, indent=2))
     return 0 if board.get("status") == "completed" else 1
 

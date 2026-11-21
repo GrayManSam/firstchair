@@ -99,6 +99,16 @@ firstchair conduct cancel rehearsal
 firstchair conduct resume --name rehearsal --score score.json
 ```
 
+### Tell a slow part from a dead conductor
+
+Each part on the board records `started_at` and `ended_at` in UTC. While
+the board says `running`, `firstchair conduct status NAME` also prints two
+values that are not saved. `conductor` is `live` when a process holds the
+score lock and `gone` when none does. `elapsed_seconds` on a running part
+can be compared with its `timeout_seconds`. A `live` conductor with a part
+inside its timeout is still working. Grok reviews often take several
+minutes. A `gone` conductor will never finish the score. Use `resume`.
+
 ### Cancel a running score
 
 Run `firstchair conduct cancel NAME` from another terminal. The conductor
