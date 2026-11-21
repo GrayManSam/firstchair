@@ -26,6 +26,10 @@ python3 scripts/delegate.py finish NAME --delete-branch          # after merge
 
 - Worktrees start from `HEAD`. Commit first, or pass `--with-changes` to carry
   uncommitted and untracked files into the worker's worktree.
+- Pick one session ID when the session starts and pass `--session ID`
+  before the subcommand on every `delegate` and `conduct` command. Shell
+  variables do not persist between commands here. Do not pass another
+  session's ID unless the user asks.
 - Grok is a read worker. A Grok write worker has terminal commands and
   network access, so it is refused unless the user asks for it and the run
   passes `--allow-grok-write`.

@@ -71,6 +71,8 @@ The conductor starts another Grok process when the seat is `self`.
       part is not replayed, and resume refuses that score.
 - [x] Refuse a Grok write worker unless the run passes `--allow-grok-write`,
       and keep Grok out of automatic write selection.
+- [x] Record a lead session ID on every score and delegate job, and refuse
+      cancel, resume, collect, and finish from another session.
 - [ ] Give the Grok read worker the deny rules the live adapter uses, then
       verify the command against the installed Grok CLI.
 - [ ] Run a real score with a limit above 1, a cancel, and a resume against

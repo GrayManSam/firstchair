@@ -20,6 +20,7 @@ import json
 import math
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -95,6 +96,50 @@ MODE_RULES = {
 
 class DelegateError(Exception):
     """A usage or environment problem reported without a traceback."""
+
+
+SESSION_ENV = "FIRSTCHAIR_SESSION"
+
+
+def session_id(args: argparse.Namespace, *, create: bool = False) -> str | None:
+    """The lead session's ID from --session, else FIRSTCHAIR_SESSION.
+
+    A command that starts work makes a new ID when none was given, and prints
+    it. A command that acts on existing work never invents one.
+    """
+    given = getattr(args, "session", None) or os.environ.get(SESSION_ENV)
+    if given:
+        if not NAME_PATTERN.fullmatch(given):
+            raise DelegateError("session must be 1-63 characters of a-z, 0-9, '.', '_' or '-'")
+        return given
+    return "s-" + secrets.token_hex(6) if create else None
+
+
+def require_owner(owner: object, session: str | None, what: str) -> None:
+    """Refuse to act on work that another lead session started.
+
+    The ID is a guard against mix-ups between sessions sharing a checkout. It
+    is not a secret. Work recorded before sessions existed has no owner.
+    """
+    if owner is None:
+        return
+    if not isinstance(owner, str) or not NAME_PATTERN.fullmatch(owner):
+        raise DelegateError(f"{what} has an unreadable session ID")
+    if session != owner:
+        raise DelegateError(
+            f"{what} belongs to session {owner}; pass --session {owner} to act on it"
+        )
+
+
+def job_session(repo: Path, name: str) -> object:
+    """The session recorded for a delegate job, or None for an older job."""
+    path = delegation_dir(repo, name) / "session"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError):
+        return ""
 
 
 @dataclass(frozen=True)
@@ -489,6 +534,7 @@ def launch_job(
     worker process itself runs outside the lock.
     """
     repo, provider, env, name, timeout = _resolve(args)
+    session = session_id(args, create=True)
     task = read_task(args)
     job = Job(
         provider=provider, mode=args.mode, name=name, repo=repo,
@@ -505,6 +551,7 @@ def launch_job(
         if job.log_dir.exists():
             raise DelegateError(f"log directory {job.log_dir} already exists; choose another --name")
         job.log_dir.mkdir(parents=True, mode=0o700)
+        (job.log_dir / "session").write_text(f"{session}\n", encoding="utf-8")
         create_worktree(job)
         head = git(job.worktree, "rev-parse", "HEAD").strip()
     keep = job.mode == "write" or args.keep
@@ -550,6 +597,7 @@ def launch_job(
     status = "timeout" if code is None else ("completed" if accepted else "failed")
     summary = {
         "name": name,
+        "session": session,
         "provider": provider,
         "lead": job.lead,
         "requested_provider": args.provider,
@@ -569,7 +617,7 @@ def launch_job(
     if job.mode == "read" and changes["status"] != baseline:
         summary["warning"] = "read task changed files in its disposable worktree; changes discarded"
     redact_record(summary)
-    metadata = {key: summary[key] for key in ("name", "provider", "lead", "mode", "status", "usage")}
+    metadata = {key: summary[key] for key in ("name", "session", "provider", "lead", "mode", "status", "usage")}
     (job.log_dir / "summary.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return (0 if status == "completed" else (124 if code is None else 1)), summary
 
@@ -613,7 +661,11 @@ def list_jobs(args: argparse.Namespace) -> int:
     jobs = []
     for job in delegate_worktrees(repo):
         changes = worktree_changes(Path(job["worktree"]))
-        jobs.append({**job, "dirty": bool(changes["status"])})
+        owner = job_session(repo, job["name"])
+        jobs.append({
+            **job, "dirty": bool(changes["status"]),
+            "session": owner if isinstance(owner, str) and owner else None,
+        })
     branches = [
         line.strip() for line in git(repo, "branch", "--list", BRANCH_PREFIX + "*",
                                      "--format=%(refname:short)").splitlines()
@@ -639,6 +691,7 @@ def collect(args: argparse.Namespace) -> int:
     """Commit a write worker's changes on its branch so the lead can review and merge them."""
     repo = repo_root(Path(args.repo or Path.cwd()))
     job = find_job(repo, args.name)
+    require_owner(job_session(repo, args.name), session_id(args), f"delegate job {args.name}")
     if not job["branch"]:
         raise DelegateError(f"{args.name} has no branch; only write tasks can be collected")
     worktree = Path(job["worktree"])
@@ -665,6 +718,7 @@ def finish(args: argparse.Namespace) -> int:
     """Remove a delegate worktree; with --delete-branch also drop its branch."""
     repo = repo_root(Path(args.repo or Path.cwd()))
     job = find_job(repo, args.name)
+    require_owner(job_session(repo, args.name), session_id(args), f"delegate job {args.name}")
     worktree = Path(job["worktree"])
     if worktree_changes(worktree)["status"] and not args.force:
         raise DelegateError(f"{args.name} has uncommitted changes; collect it or pass --force")
@@ -679,6 +733,10 @@ def finish(args: argparse.Namespace) -> int:
 
 def configure_parser(root: argparse.ArgumentParser) -> None:
     root.add_argument("--repo", help="Repository path (default: current checkout)")
+    root.add_argument(
+        "--session",
+        help=f"This lead session's ID (default: ${SESSION_ENV}; run makes one when unset)",
+    )
     commands = root.add_subparsers(dest="delegate_command", required=True)
 
     run = commands.add_parser("run", help="Dispatch one task to a worker")

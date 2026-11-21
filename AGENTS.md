@@ -20,6 +20,9 @@ one lead value) or a score through `firstchair conduct run --lead claude|codex|g
 Seat `self` starts the lead's own provider. In a source checkout,
 `python3 scripts/delegate.py` is also available for one worker. The dispatcher
 can launch Codex, Claude Code, and Grok Build workers.
+Each lead session picks one session ID and passes `--session ID` on every
+`delegate` and `conduct` command. A lead does not cancel, resume, collect or
+finish work that belongs to another session unless the user asks.
 See `docs/orchestration.md` for the lead workflow. A dispatched worker runs in its own git
 worktree and receives its mode (`read` or `write`) and task in the prompt.
 Workers edit only inside that worktree, never run Git write commands or

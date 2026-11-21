@@ -71,6 +71,7 @@ class DelegateTests(unittest.TestCase):
         environment = {
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "FIRSTCHAIR_WORKTREE_ROOT": str(self.temp / "worktrees"),
+            "FIRSTCHAIR_SESSION": "fixture-session",
             "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
             "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
         }
@@ -135,6 +136,48 @@ class DelegateTests(unittest.TestCase):
         for order in delegate.WORKER_ORDER.values():
             self.assertNotIn("grok", order["write"])
 
+    def test_another_session_cannot_collect_or_finish_a_job(self):
+        code, out, error = self._main("run", "codex", "Edit", "--mode", "write", "--name", "owned")
+        self.assertEqual(code, 0, error)
+        self.assertEqual(json.loads(out)["session"], "fixture-session")
+        listed = json.loads(self._main("list")[1])
+        self.assertEqual(listed["worktrees"][0]["session"], "fixture-session")
+        worktree = self.temp / "worktrees" / "repo" / "owned"
+        for session in ("other-session", None):
+            with self.subTest(session=session):
+                environment = {} if session is None else {"FIRSTCHAIR_SESSION": session}
+                with mock.patch.dict(os.environ, environment):
+                    if session is None:
+                        del os.environ["FIRSTCHAIR_SESSION"]
+                    for command in (("collect", "owned"), ("finish", "owned", "--delete-branch", "--force")):
+                        code, out, error = self._main(*command)
+                        self.assertEqual(code, 2, out)
+                        self.assertIn("belongs to session fixture-session", error)
+                self.assertTrue((worktree / "added.txt").exists())
+                self.assertEqual(self._git("log", "--oneline", "delegate/owned").count("\n"), 1)
+        # Naming the owner on the command line is the deliberate way across.
+        with mock.patch.dict(os.environ, {"FIRSTCHAIR_SESSION": "other-session"}):
+            code, _, error = self._main("--session", "fixture-session", "collect", "owned")
+            self.assertEqual(code, 0, error)
+            code, _, error = self._main("--session", "Not Valid", "finish", "owned")
+            self.assertEqual(code, 2)
+            self.assertIn("session must be", error)
+
+    def test_a_run_without_a_session_makes_one_and_an_older_job_has_no_owner(self):
+        with mock.patch.dict(os.environ):
+            del os.environ["FIRSTCHAIR_SESSION"]
+            code, out, error = self._main("run", "codex", "Edit", "--mode", "write", "--name", "fresh")
+            self.assertEqual(code, 0, error)
+            made = json.loads(out)["session"]
+            self.assertRegex(made, r"^s-[0-9a-f]{12}$")
+            code, _, error = self._main("finish", "fresh", "--force")
+            self.assertEqual(code, 2)
+            self.assertIn(f"pass --session {made}", error)
+            # A job from before sessions existed has no session file.
+            (self.repo / ".firstchair" / "delegations" / "fresh" / "session").unlink()
+            code, _, error = self._main("finish", "fresh", "--force", "--delete-branch")
+            self.assertEqual(code, 0, error)
+
     def test_unknown_codex_version_does_not_report_usage(self):
         with mock.patch.dict(os.environ, {"FAKE_CODEX_VERSION": "0.0.0"}):
             code, output, error = self._main("run", "codex", "Inspect the README")
@@ -157,7 +200,8 @@ class DelegateTests(unittest.TestCase):
         self.assertIsNone(summary["branch"])
         self.assertFalse((self.temp / "worktrees" / "repo" / "scout").exists())
         directory = Path(summary["logs"])
-        self.assertEqual([path.name for path in directory.iterdir()], ["summary.json"])
+        self.assertEqual(sorted(path.name for path in directory.iterdir()), ["session", "summary.json"])
+        self.assertEqual((directory / "session").read_text(), "fixture-session\n")
         saved = json.loads((directory / "summary.json").read_text())
         self.assertNotIn("reply", saved)
         self.assertNotIn("task", saved)

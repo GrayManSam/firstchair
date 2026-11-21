@@ -15,6 +15,12 @@
 - A part can set `"after"` to the name of an earlier part. Its prompt then
   includes that part's reply, marked as untrusted output and cut at 32,000
   characters. The reply stays in memory. The board stores only the name.
+- Every score and delegate job records the lead session that started it.
+  Pass `--session ID` or set `FIRSTCHAIR_SESSION`. `delegate run` and
+  `conduct run` make an ID when none is given and print it. `conduct
+  cancel`, `conduct resume`, `delegate collect`, and `delegate finish` are
+  refused from a different session or from none. Work recorded before this
+  change has no owner.
 - The board records when each part started and ended. While a score is
   running, `conduct status` also reports whether a conductor still holds
   the score lock and how long each running part has run.

@@ -44,6 +44,8 @@ from .delegation import (
     launch_job,
     remove_worktree,
     repo_root,
+    require_owner,
+    session_id,
     resolve_seat,
     worktree_root,
 )
@@ -284,7 +286,7 @@ TERMINATED = "terminated by SIGTERM; worker stopped"
 def _launch_part(
     repo: Path, lead: str, part: Part, with_changes: bool,
     stop: threading.Event | None, setup_lock: threading.Lock | None,
-    allow_grok_write: bool = False,
+    allow_grok_write: bool = False, session: str | None = None,
 ) -> tuple[int, dict[str, object] | None, str | None]:
     """Run one part and always return (exit code, summary, error).
 
@@ -295,7 +297,7 @@ def _launch_part(
         repo=str(repo), provider=part.seat, lead=lead, task=part.task, prompt_file=None,
         mode=part.mode, name=part.name, timeout=part.timeout, profile=None, model=None,
         effort=None, dry_run=False, keep=False, with_changes=with_changes,
-        allow_grok_write=allow_grok_write,
+        allow_grok_write=allow_grok_write, session=session,
     )
     try:
         code, summary = launch_job(namespace, stop=stop, setup_lock=setup_lock)
@@ -311,6 +313,7 @@ def _launch_part(
 def run_score(
     repo: Path, lead: str, name: str, parts: tuple[Part, ...], *,
     with_changes: bool = False, limit: int = 1, allow_grok_write: bool = False,
+    session: str | None = None,
 ) -> tuple[int, dict[str, object]]:
     """Run parts in input order, ``limit`` at a time.
 
@@ -319,6 +322,7 @@ def run_score(
     """
     name = check_name(name)
     limit = check_limit(limit)
+    session = session or session_id(argparse.Namespace(), create=True)
     planned = plan_score(lead, parts, allow_grok_write=allow_grok_write)
     path = board_path(repo, name)
     if path.parent.exists():
@@ -340,7 +344,7 @@ def run_score(
     try:
         path.parent.mkdir(parents=True, mode=0o700)
         lock = _lock(path.parent)
-        return _perform(repo, lead, name, parts, rows, with_changes, limit, allow_grok_write)
+        return _perform(repo, lead, name, parts, rows, with_changes, limit, allow_grok_write, session)
     finally:
         if lock is not None:
             lock.close()
@@ -350,6 +354,7 @@ def run_score(
 def resume_score(
     repo: Path, name: str, parts: tuple[Part, ...], *,
     with_changes: bool = False, limit: int = 1, allow_grok_write: bool = False,
+    session: str | None = None,
 ) -> tuple[int, dict[str, object]]:
     """Continue a score that has no live conductor.
 
@@ -364,6 +369,8 @@ def resume_score(
     if fcntl is None:
         raise DelegateError("resume needs POSIX file locks to prove the conductor is gone")
     board = read_board(repo, name)
+    require_owner(board.get("session"), session, f"score {name}")
+    session = session or session_id(argparse.Namespace(), create=True)
     lead = board.get("lead")
     saved = board.get("parts")
     if board.get("schema_version") != 1 or not isinstance(lead, str) or lead not in LEAD_NAMES:
@@ -417,7 +424,7 @@ def resume_score(
         rows: list[dict[str, object]] = []
         for index, row in enumerate(saved):
             rows.append(dict(row) if index not in pending else _row(planned[index], "queued"))
-        return _perform(repo, lead, name, parts, rows, with_changes, limit, allow_grok_write)
+        return _perform(repo, lead, name, parts, rows, with_changes, limit, allow_grok_write, session)
     finally:
         if lock is not None:
             lock.close()
@@ -426,13 +433,14 @@ def resume_score(
 
 def _perform(
     repo: Path, lead: str, name: str, parts: tuple[Part, ...], rows: list[dict[str, object]],
-    with_changes: bool, limit: int, allow_grok_write: bool = False,
+    with_changes: bool, limit: int, allow_grok_write: bool = False, session: str | None = None,
 ) -> tuple[int, dict[str, object]]:
     """Run every part whose row is queued. The caller owns SIGTERM and the lock."""
     path = board_path(repo, name)
     board: dict[str, object] = {
         "schema_version": 1,
         "name": name,
+        "session": session,
         "lead": lead,
         "limit": limit,
         "status": "running",
@@ -489,7 +497,9 @@ def _perform(
             if not reply:
                 return 1, None, f"part {part.after} returned no reply to read"
             part = _with_context(part, reply)
-        return _launch_part(repo, lead, part, with_changes, stop, setup_lock, allow_grok_write)
+        return _launch_part(
+            repo, lead, part, with_changes, stop, setup_lock, allow_grok_write, session,
+        )
 
     def sequential() -> None:
         for index in pending:
@@ -585,6 +595,7 @@ def _perform(
         shown.append(public)
     printable = {
         "name": name,
+        "session": session,
         "lead": lead,
         "limit": limit,
         "status": board["status"],
@@ -593,9 +604,10 @@ def _perform(
     return code, printable
 
 
-def cancel_score(repo: Path, name: str) -> dict[str, object]:
+def cancel_score(repo: Path, name: str, session: str | None = None) -> dict[str, object]:
     """Ask the live conductor of a score to stop its running parts."""
     board = read_board(repo, name)
+    require_owner(board.get("session"), session, f"score {name}")
     directory = board_path(repo, name).parent
     if board.get("status") != "running":
         raise DelegateError(f"score {name} is not running")
@@ -640,12 +652,12 @@ def _run(args: argparse.Namespace) -> int:
     if args.resume:
         code, printable = resume_score(
             repo, args.name, score.parts, with_changes=args.with_changes, limit=limit,
-            allow_grok_write=args.allow_grok_write,
+            allow_grok_write=args.allow_grok_write, session=session_id(args),
         )
     else:
         code, printable = run_score(
             repo, args.lead, args.name, score.parts, with_changes=args.with_changes, limit=limit,
-            allow_grok_write=args.allow_grok_write,
+            allow_grok_write=args.allow_grok_write, session=session_id(args, create=True),
         )
     redact_record(printable)
     print(json.dumps(printable, indent=2))
@@ -654,7 +666,7 @@ def _run(args: argparse.Namespace) -> int:
 
 def _cancel(args: argparse.Namespace) -> int:
     repo = repo_root(Path(args.repo or Path.cwd()))
-    print(json.dumps(cancel_score(repo, args.name), indent=2))
+    print(json.dumps(cancel_score(repo, args.name, session_id(args)), indent=2))
     return 0
 
 
@@ -696,6 +708,10 @@ def _status(args: argparse.Namespace) -> int:
 
 def configure_parser(root: argparse.ArgumentParser) -> None:
     root.add_argument("--repo", help="Repository path (default: current checkout)")
+    root.add_argument(
+        "--session",
+        help="This lead session's ID (default: $FIRSTCHAIR_SESSION; run makes one when unset)",
+    )
     commands = root.add_subparsers(dest="conduct_command", required=True)
 
     plan = commands.add_parser("plan", help="Resolve a score without starting workers")

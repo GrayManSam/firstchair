@@ -120,6 +120,7 @@ class ConductorTests(unittest.TestCase):
         environment = {
             "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
             "FIRSTCHAIR_WORKTREE_ROOT": str(self.temp / "worktrees"),
+            "FIRSTCHAIR_SESSION": "fixture-session",
             "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
             "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
         }
@@ -698,6 +699,63 @@ class ConductorTests(unittest.TestCase):
         self.assertIn("SIGTERM", board["parts"][1]["error"])
         for name in ("slow-a", "slow-b", "later"):
             self.assertFalse((self.temp / "worktrees" / "repo" / name).exists())
+
+    def test_another_session_cannot_cancel_or_resume_a_score_or_finish_its_parts(self):
+        score = self._score([self._part("first", "codex"), self._part("edit", "claude", mode="write")])
+        with mock.patch.dict(os.environ, {"FAKE_CLAUDE_EXIT": "1"}):
+            code, output, error = self._main("run", "--lead", "grok", "--name", "mine", "--score", score)
+        self.assertEqual(code, 1, error)
+        self.assertEqual(json.loads(output)["session"], "fixture-session")
+        before = self._board("mine")
+        self.assertEqual(before["session"], "fixture-session")
+        for name in ("first", "edit"):
+            self.assertEqual(
+                (self.repo / ".firstchair" / "delegations" / name / "session").read_text(),
+                "fixture-session\n",
+            )
+        worktree = self.temp / "worktrees" / "repo" / "edit"
+        for session in ("other-session", None):
+            with self.subTest(session=session), mock.patch.dict(os.environ, {"FIRSTCHAIR_SESSION": session or "x"}):
+                if session is None:
+                    del os.environ["FIRSTCHAIR_SESSION"]
+                for command in (("cancel", "mine"), ("resume", "--name", "mine", "--score", score)):
+                    code, output, error = self._main(*command)
+                    self.assertEqual(code, 2, output)
+                    self.assertIn("score mine belongs to session fixture-session", error)
+                code, _, error = self._delegate("finish", "edit", "--delete-branch", "--force")
+                self.assertEqual(code, 2)
+                self.assertIn("belongs to session fixture-session", error)
+                # Reading another session's board is allowed.
+                code, output, _ = self._main("status", "mine")
+                self.assertEqual(json.loads(output)["session"], "fixture-session")
+            self.assertEqual(self._board("mine"), before)
+            self.assertTrue((worktree / "claude-edit.txt").exists())
+        with mock.patch.dict(os.environ, {"FIRSTCHAIR_SESSION": "other-session"}):
+            code, _, error = self._delegate("--session", "fixture-session", "finish", "edit", "--delete-branch", "--force")
+            self.assertEqual(code, 0, error)
+            code, output, error = self._main("--session", "fixture-session", "resume", "--name", "mine", "--score", score)
+            self.assertEqual(code, 0, error)
+            self.assertEqual(json.loads(output)["session"], "fixture-session")
+        self.assertEqual(self._board("mine")["session"], "fixture-session")
+
+    def test_a_score_without_a_session_makes_one_and_refuses_a_bad_board_session(self):
+        score = self._score([self._part("first", "codex"), self._part("second", "claude")])
+        with mock.patch.dict(os.environ, {"FAKE_CLAUDE_EXIT": "1"}):
+            del os.environ["FIRSTCHAIR_SESSION"]
+            code, output, error = self._main("run", "--lead", "grok", "--name", "anon", "--score", score)
+            self.assertEqual(code, 1, error)
+            made = json.loads(output)["session"]
+            self.assertRegex(made, r"^s-[0-9a-f]{12}$")
+            code, _, error = self._main("resume", "--name", "anon", "--score", score)
+            self.assertEqual(code, 2)
+            self.assertIn(f"pass --session {made}", error)
+        path = self.repo / ".firstchair" / "conduct" / "anon" / "board.json"
+        board = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({**board, "session": "bad session; rm"}), encoding="utf-8")
+        code, _, error = self._main("resume", "--name", "anon", "--score", score)
+        self.assertEqual(code, 2)
+        self.assertIn("unreadable session ID", error)
+        self.assertNotIn("rm", error)
 
     def test_resume_refuses_an_unreviewed_write_part_until_the_lead_finishes_it(self):
         score = self._score([self._part("first", "codex"), self._part("edit", "claude", mode="write")])

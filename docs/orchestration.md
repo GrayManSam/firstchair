@@ -44,6 +44,43 @@ firstchair delegate run auto --lead grok --mode write --name parser-fix --prompt
 firstchair delegate run codex --lead claude "Review the parser tests"
 ```
 
+## Session IDs
+
+Several lead sessions can share one checkout. Each score and each delegate
+job records the ID of the lead session that started it, so one session does
+not cancel, resume, collect, or finish another session's work by mistake.
+
+Pick one ID when a lead session starts and use it for every command in
+that session. Pass `--session ID` before the subcommand, or set
+`FIRSTCHAIR_SESSION`. The flag wins. An ID is 1 to 63 characters of `a-z`,
+`0-9`, `.`, `_`, or `-`. When neither is set, `delegate run` and
+`conduct run` make an ID such as `s-3f9a1c0b7d2e` and print it as
+`session` in their JSON.
+
+```sh
+firstchair conduct --session claude-parser run --lead claude --name slice --score score.json
+firstchair conduct --session claude-parser cancel slice
+firstchair delegate --session claude-parser finish parser --delete-branch
+```
+
+- `conduct cancel`, `conduct resume`, `delegate collect`, and
+  `delegate finish` are refused unless the session matches the recorded
+  one. A command with no session is refused too. The error names the
+  owning session.
+- `conduct status` and `delegate list` are read-only. They work from any
+  session and show each owner.
+- The parts of a score carry the score's session.
+- The ID is saved on the board, in `.firstchair/delegations/NAME/session`,
+  and in the job summary.
+- A job or score recorded before session IDs existed has no owner and can
+  be acted on from any session.
+
+The ID prevents mix-ups. It is not a secret and does not control access.
+Any session can read another's ID and pass it on purpose. Score names, job
+names, worktrees, and branches are still shared across sessions, so a name
+already in use is refused. `firstchair run` records have their own run IDs
+and locks and do not carry a session ID.
+
 ## Conductor score
 
 The primary seat runs the score. Pass `--lead` as that seat. Each part names
