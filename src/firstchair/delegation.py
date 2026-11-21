@@ -31,11 +31,13 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .accounts import account_environment
+from .accounts import account_environment, list_profiles
 from .claude_json import parse_claude_json
 from .codex_jsonl import CodexUsage, parse_codex_jsonl
 from .provider import ProviderError
+from .quota import read_quota
 from .redaction import redact_record
+from .rotation import Policy, Rotation, account_key, ledger_path
 from .sessions import SESSION_ENV, require_owner, resolve_session
 from .versions import read_version
 
@@ -446,7 +448,38 @@ def resolve_seat(seat: str, lead: str, mode: str, *, allow_grok_write: bool = Fa
     return provider
 
 
-def _resolve(args: argparse.Namespace) -> tuple[Path, str, dict[str, str] | None, str, float]:
+@dataclass(frozen=True)
+class Account:
+    provider: str
+    profile: str | None
+
+
+@dataclass
+class Choice:
+    """The account a worker runs under, and how it was picked."""
+
+    account: Account
+    rotation: Rotation | None = None
+    candidates: list[dict[str, object]] | None = None
+
+
+def choose_account(provider: str) -> Choice:
+    """Pick the worker's account from real usage: the default sign-in or a named one."""
+    try:
+        named = [item["profile"] for item in list_profiles() if item["provider"] == provider]
+        seats = [Account(provider, None), *(Account(provider, name) for name in named)]
+        rotation = Rotation(
+            ledger_path(), Policy(), reader=lambda seat: read_quota(seat.provider, seat.profile),
+        )
+        usable, candidates = rotation.choose(seats, seats[0])
+    except ValueError as error:
+        raise DelegateError(str(error)) from None
+    if not usable:
+        raise DelegateError(f"every {provider} account is out of usage")
+    return Choice(usable[0], rotation, candidates)
+
+
+def _resolve(args: argparse.Namespace) -> tuple[Path, str, dict[str, str] | None, str, float, Choice]:
     repo = repo_root(Path(args.repo or Path.cwd()))
     if args.provider in {"auto", "self"} and (args.model or args.effort):
         raise DelegateError("--model and --effort require an explicit worker")
@@ -456,18 +489,25 @@ def _resolve(args: argparse.Namespace) -> tuple[Path, str, dict[str, str] | None
         args.provider, args.lead, args.mode,
         allow_grok_write=getattr(args, "allow_grok_write", False),
     )
-    env = account_environment(provider, args.profile) if args.profile is not None else None
+    if getattr(args, "rotate_accounts", False):
+        if args.profile is not None:
+            raise DelegateError("--rotate-accounts picks the account; leave out --profile")
+        choice = choose_account(provider)
+    else:
+        choice = Choice(Account(provider, args.profile))
+    profile = choice.account.profile
+    env = account_environment(provider, profile) if profile is not None else None
     name = check_name(args.name or default_name(provider))
     timeout = DEFAULT_TIMEOUT[args.mode] if args.timeout is None else args.timeout
     if not math.isfinite(timeout) or timeout <= 0:
         raise DelegateError("--timeout must be a finite positive number")
-    return repo, provider, env, name, timeout
+    return repo, provider, env, name, timeout, choice
 
 
 def dispatch(args: argparse.Namespace) -> int:
     """Run one worker for the command line: own SIGTERM and print the summary."""
     if args.dry_run:
-        _, provider, _, _, timeout = _resolve(args)
+        _, provider, _, _, timeout, choice = _resolve(args)
         print(json.dumps({
             "status": "planned",
             "lead": args.lead,
@@ -478,7 +518,14 @@ def dispatch(args: argparse.Namespace) -> int:
             "model": args.model,
             "effort": args.effort,
             "carry_changes": args.with_changes,
-            "account_selection": "named" if args.profile is not None else "default",
+            "account_selection": (
+                "rotated" if choice.rotation is not None
+                else "named" if args.profile is not None else "default"
+            ),
+            **({
+                "account": account_key(provider, choice.account.profile),
+                "account_candidates": choice.candidates,
+            } if choice.rotation is not None else {}),
         }, indent=2))
         return 0
     previous = signal.signal(signal.SIGTERM, _on_sigterm)
@@ -505,7 +552,7 @@ def launch_job(
     ``setup_lock`` serializes the git steps before and after the worker. The
     worker process itself runs outside the lock.
     """
-    repo, provider, env, name, timeout = _resolve(args)
+    repo, provider, env, name, timeout, choice = _resolve(args)
     session = session_id(args, create=True)
     task = read_task(args)
     job = Job(
@@ -586,6 +633,12 @@ def launch_job(
         "changes": changes,
         "reply": reply if len(reply) <= REPLY_LIMIT else reply[:REPLY_LIMIT] + "\n[truncated]",
     }
+    if choice.rotation is not None:
+        summary["account"] = account_key(provider, choice.account.profile)
+        summary["account_candidates"] = choice.candidates
+        if status == "completed":
+            # Count the work against the account. A failed worker's cause is not known.
+            choice.rotation.observe(choice.account, usage, None)
     if job.mode == "read" and changes["status"] != baseline:
         summary["warning"] = "read task changed files in its disposable worktree; changes discarded"
     redact_record(summary)
@@ -721,6 +774,10 @@ def configure_parser(root: argparse.ArgumentParser) -> None:
     run.add_argument("--prompt-file", help="Read the task from this file")
     run.add_argument("--timeout", type=float, help="Seconds before the worker is killed")
     run.add_argument("--profile", help="Use a named login for the explicit worker")
+    run.add_argument(
+        "--rotate-accounts", action="store_true",
+        help="Pick the worker's account from real usage: its default sign-in or a named one",
+    )
     run.add_argument("--model", help="Provider model override")
     run.add_argument("--effort", help="Provider reasoning effort override")
     run.add_argument("--dry-run", action="store_true", help="Show the selection without launching a worker")

@@ -286,7 +286,7 @@ TERMINATED = "terminated by SIGTERM; worker stopped"
 def _launch_part(
     repo: Path, lead: str, part: Part, with_changes: bool,
     stop: threading.Event | None, setup_lock: threading.Lock | None,
-    allow_grok_write: bool = False, session: str | None = None,
+    allow_grok_write: bool = False, session: str | None = None, rotate_accounts: bool = False,
 ) -> tuple[int, dict[str, object] | None, str | None]:
     """Run one part and always return (exit code, summary, error).
 
@@ -297,7 +297,7 @@ def _launch_part(
         repo=str(repo), provider=part.seat, lead=lead, task=part.task, prompt_file=None,
         mode=part.mode, name=part.name, timeout=part.timeout, profile=None, model=None,
         effort=None, dry_run=False, keep=False, with_changes=with_changes,
-        allow_grok_write=allow_grok_write, session=session,
+        allow_grok_write=allow_grok_write, session=session, rotate_accounts=rotate_accounts,
     )
     try:
         code, summary = launch_job(namespace, stop=stop, setup_lock=setup_lock)
@@ -313,7 +313,7 @@ def _launch_part(
 def run_score(
     repo: Path, lead: str, name: str, parts: tuple[Part, ...], *,
     with_changes: bool = False, limit: int = 1, allow_grok_write: bool = False,
-    session: str | None = None,
+    session: str | None = None, rotate_accounts: bool = False,
 ) -> tuple[int, dict[str, object]]:
     """Run parts in input order, ``limit`` at a time.
 
@@ -344,7 +344,9 @@ def run_score(
     try:
         path.parent.mkdir(parents=True, mode=0o700)
         lock = _lock(path.parent)
-        return _perform(repo, lead, name, parts, rows, with_changes, limit, allow_grok_write, session)
+        return _perform(
+            repo, lead, name, parts, rows, with_changes, limit, allow_grok_write, session, rotate_accounts,
+        )
     finally:
         if lock is not None:
             lock.close()
@@ -354,7 +356,7 @@ def run_score(
 def resume_score(
     repo: Path, name: str, parts: tuple[Part, ...], *,
     with_changes: bool = False, limit: int = 1, allow_grok_write: bool = False,
-    session: str | None = None,
+    session: str | None = None, rotate_accounts: bool = False,
 ) -> tuple[int, dict[str, object]]:
     """Continue a score that has no live conductor.
 
@@ -424,7 +426,9 @@ def resume_score(
         rows: list[dict[str, object]] = []
         for index, row in enumerate(saved):
             rows.append(dict(row) if index not in pending else _row(planned[index], "queued"))
-        return _perform(repo, lead, name, parts, rows, with_changes, limit, allow_grok_write, session)
+        return _perform(
+            repo, lead, name, parts, rows, with_changes, limit, allow_grok_write, session, rotate_accounts,
+        )
     finally:
         if lock is not None:
             lock.close()
@@ -434,6 +438,7 @@ def resume_score(
 def _perform(
     repo: Path, lead: str, name: str, parts: tuple[Part, ...], rows: list[dict[str, object]],
     with_changes: bool, limit: int, allow_grok_write: bool = False, session: str | None = None,
+    rotate_accounts: bool = False,
 ) -> tuple[int, dict[str, object]]:
     """Run every part whose row is queued. The caller owns SIGTERM and the lock."""
     path = board_path(repo, name)
@@ -489,6 +494,8 @@ def _perform(
         usage = summary.get("usage")
         if isinstance(usage, dict):
             row["usage"] = usage
+        if isinstance(summary.get("account"), str):
+            row["account"] = summary["account"]
 
     def launch(index: int, setup_lock: threading.Lock | None) -> tuple[int, dict[str, object] | None, str | None]:
         part = parts[index]
@@ -498,7 +505,7 @@ def _perform(
                 return 1, None, f"part {part.after} returned no reply to read"
             part = _with_context(part, reply)
         return _launch_part(
-            repo, lead, part, with_changes, stop, setup_lock, allow_grok_write, session,
+            repo, lead, part, with_changes, stop, setup_lock, allow_grok_write, session, rotate_accounts,
         )
 
     def sequential() -> None:
@@ -653,11 +660,13 @@ def _run(args: argparse.Namespace) -> int:
         code, printable = resume_score(
             repo, args.name, score.parts, with_changes=args.with_changes, limit=limit,
             allow_grok_write=args.allow_grok_write, session=session_id(args),
+            rotate_accounts=args.rotate_accounts,
         )
     else:
         code, printable = run_score(
             repo, args.lead, args.name, score.parts, with_changes=args.with_changes, limit=limit,
             allow_grok_write=args.allow_grok_write, session=session_id(args, create=True),
+            rotate_accounts=args.rotate_accounts,
         )
     redact_record(printable)
     print(json.dumps(printable, indent=2))
@@ -740,6 +749,10 @@ def configure_parser(root: argparse.ArgumentParser) -> None:
         "--allow-grok-write", action="store_true",
         help="Accept Grok write parts, which have terminal commands and network access",
     )
+    run.add_argument(
+        "--rotate-accounts", action="store_true",
+        help="Pick each part's account from real usage",
+    )
     run.set_defaults(handler=_run, resume=False)
 
     resume = commands.add_parser(
@@ -758,6 +771,10 @@ def configure_parser(root: argparse.ArgumentParser) -> None:
     resume.add_argument(
         "--allow-grok-write", action="store_true",
         help="Accept Grok write parts, which have terminal commands and network access",
+    )
+    resume.add_argument(
+        "--rotate-accounts", action="store_true",
+        help="Pick each part's account from real usage",
     )
     resume.set_defaults(handler=_run, resume=True)
 

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -177,6 +178,52 @@ class DelegateTests(unittest.TestCase):
             (self.repo / ".firstchair" / "delegations" / "fresh" / "session").unlink()
             code, _, error = self._main("finish", "fresh", "--force", "--delete-branch")
             self.assertEqual(code, 0, error)
+
+    def test_rotation_runs_the_worker_under_the_account_with_the_most_room(self):
+        from firstchair.accounts import account_environment
+        from firstchair.quota import Quota, Window
+
+        state = self.temp / "xdg"
+        state.mkdir(mode=0o700)
+        used = {None: 95, "spare": 20, "full": 100}
+
+        def reader(provider, profile, **_):
+            return Quota((Window(used[profile], 300, 2_000_000_000),), True, time.time())
+
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}), \
+                mock.patch.object(delegate, "read_quota", side_effect=reader):
+            for name in ("spare", "full"):
+                account_environment("codex", name, create=True)
+            code, out, error = self._main("run", "codex", "Review", "--rotate-accounts", "--dry-run")
+            self.assertEqual(code, 0, error)
+            planned = json.loads(out)
+            self.assertEqual((planned["account_selection"], planned["account"]), ("rotated", "codex:spare"))
+            self.assertEqual(
+                {item["account"]: item["status"] for item in planned["account_candidates"]},
+                {"codex": "over_budget", "codex:spare": "ready", "codex:full": "exhausted"},
+            )
+            code, out, error = self._main("run", "codex", "Review", "--name", "rotated", "--rotate-accounts")
+            self.assertEqual(code, 0, error)
+            summary = json.loads(out)
+            self.assertEqual(summary["account"], "codex:spare")
+            ledger = json.loads((state / "firstchair" / "account-ledger.json").read_text())
+            # The finished work is counted against the account that ran it.
+            self.assertEqual(len(ledger["accounts"]["codex:spare"]["events"]), 1)
+            self.assertEqual(ledger["accounts"]["codex"]["events"], [])
+            self.assertNotIn("Review", json.dumps(ledger))
+
+            code, out, error = self._main(
+                "run", "codex", "Review", "--rotate-accounts", "--profile", "spare", "--dry-run",
+            )
+            self.assertEqual(code, 2)
+            self.assertIn("leave out --profile", error)
+            used.update({None: 100, "spare": 100})
+            # Every account full: nothing starts.
+            (state / "firstchair" / "account-ledger.json").unlink()
+            code, out, error = self._main("run", "codex", "Review", "--name", "none-left", "--rotate-accounts")
+            self.assertEqual(code, 2, out)
+            self.assertIn("every codex account is out of usage", error)
+            self.assertFalse((self.repo / ".firstchair" / "delegations" / "none-left").exists())
 
     def test_unknown_codex_version_does_not_report_usage(self):
         with mock.patch.dict(os.environ, {"FAKE_CODEX_VERSION": "0.0.0"}):

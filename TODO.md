@@ -86,7 +86,8 @@ The conductor starts another Grok process when the seat is `self`.
 - [ ] Verify simultaneous signed-in accounts on each supported host and validate opt-in account quota snapshots and per-process profile selection, with freshness, cooldowns and explicit account policy.
 - [x] Rotate among signed-in accounts before each stage using real usage read from Codex and Claude Code, cooldowns and optional budgets, and record the selection rationale.
 - [ ] Read Grok Build usage when its CLI offers a headless way. Read Claude usage from the stage's own output so no extra prompt is needed.
-- [ ] Rotate accounts for `delegate` and `conduct` workers, and verify rotation across several real signed-in accounts of one provider.
+- [x] Rotate accounts for `delegate` and `conduct` workers.
+- [ ] Verify rotation across several real signed-in accounts of one provider.
 - [ ] Route among models using task requirements.
 - [ ] Verify state backup, restart, migration and workspace recovery paths with synthetic data.
 - [ ] Rehearse install and upgrade on advertised platforms. Record opt-in provider smoke results.

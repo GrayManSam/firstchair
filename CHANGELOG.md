@@ -33,6 +33,9 @@
   budgets counted by Firstchair. The run record lists the accounts
   considered for each stage. `firstchair auth usage [--refresh]` shows the
   per-user ledger and `auth clear-cooldown` ends a rest.
+- `firstchair delegate run --rotate-accounts` and `firstchair conduct run
+  --rotate-accounts` pick each worker's account from the same real usage
+  readings. The summary and the board record the chosen account.
 - Each saved stage records the profile that ran it.
 - The README is reorganized around what Firstchair is for, and the package
   metadata gains keywords, classifiers, and project links.

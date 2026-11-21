@@ -135,6 +135,10 @@ Where the real numbers come from:
 Firstchair asks the signed-in CLI. It does not open a credential file or
 call a provider's web API itself.
 
+`firstchair delegate run --rotate-accounts` and `firstchair conduct run
+--rotate-accounts` pick each worker's account the same way, from the
+provider's default sign-in and its named ones.
+
 | Option | Effect |
 | --- | --- |
 | `--account-switch-percent N` | Move off an account when a real usage window reaches N percent (default 90) |

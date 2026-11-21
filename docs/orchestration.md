@@ -217,6 +217,22 @@ reply the versioned parser accepts. Other usage is reported as unknown.
 Automatic account selection, quota-based retries, and model optimization
 require provider contracts and policy beyond the dispatcher's PATH check.
 
+## Pick a worker's account from real usage
+
+Add `--rotate-accounts` to `firstchair delegate run` or to `firstchair
+conduct run` and `resume`. The worker then runs under the account of its
+provider with the most room: the default sign-in or one of the named ones.
+The choice uses the same real usage readings, switch point, and rests as
+`firstchair run --rotate-accounts`, with the default rules. `--dry-run`
+shows the candidates. The summary and the board record the chosen account
+as `codex` for the default sign-in or `codex:NAME` for a named one. When
+every account of the provider is full or resting, nothing starts.
+
+A completed worker is counted against its account in the ledger. A failed
+worker is not, because the dispatcher does not know why it failed. Parts
+that run at the same time can pick the same account. `--rotate-accounts`
+cannot be combined with `--profile`.
+
 ## Local verification
 
 The installed dispatcher completed fixed-prompt read jobs through Codex and

@@ -862,6 +862,28 @@ class ConductorTests(unittest.TestCase):
         self.assertIn("fake grok mode write", json.loads(output)["parts"][1]["reply"])
         self.assertEqual((self.repo / "README.md").read_text(), "invented project\n")
 
+    def test_a_score_can_pick_each_parts_account_from_real_usage(self):
+        from firstchair.accounts import account_environment
+        from firstchair.quota import Quota, Window
+
+        state = self.temp / "xdg"
+        state.mkdir(mode=0o700)
+
+        def reader(provider, profile, **_):
+            return Quota((Window(10 if profile == "spare" else 60, 300, 2_000_000_000),), True, time.time())
+
+        score = self._score([self._part("first", "codex"), self._part("second", "grok")])
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}), \
+                mock.patch.object(delegate, "read_quota", side_effect=reader):
+            account_environment("codex", "spare", create=True)
+            code, output, error = self._main(
+                "run", "--lead", "claude", "--name", "pooled", "--score", score, "--rotate-accounts",
+            )
+        self.assertEqual(code, 0, error)
+        parts = json.loads(output)["parts"]
+        self.assertEqual([part["account"] for part in parts], ["codex:spare", "grok"])
+        self.assertEqual([part["account"] for part in self._board("pooled")["parts"]], ["codex:spare", "grok"])
+
     def test_malformed_claude_reply_fails_closed(self):
         (self.bin / "claude").write_text(f"#!{sys.executable}\nimport sys\nprint('{{}}')\nsys.exit(0)\n")
         score = self._score([self._part("contract", "claude")])
