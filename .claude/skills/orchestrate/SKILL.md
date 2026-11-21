@@ -49,7 +49,7 @@ python3 scripts/delegate.py run codex --mode write --name docs-x --prompt-file /
 ```
 
 - Run each dispatch with Bash `run_in_background: true` and launch independent
-  tasks in the same turn. Defaults: 600 s read, 1800 s write. Override with `--timeout`.
+  tasks in the same turn. Default: 1800 s for both modes. Override with `--timeout`.
 - Options: `--model`, `--effort`, `--keep` (keep a read worktree), `--with-changes`.
 - Exit codes: 0 completed, 1 worker failed, 124 timeout, 2 usage error.
 

@@ -201,10 +201,37 @@ read-only product path and does not use this desk.
 
 Pick one testable slice from ROADMAP.md and TODO.md. Give each worker a distinct
 name, files in scope, and acceptance criteria. Independent tasks can run
-concurrently in separate worktrees. Worktrees start from HEAD. Review pending
-changes before intentionally carrying them into a worker with `--with-changes`.
+concurrently in separate worktrees. Worktrees start from HEAD, or from the
+branch, tag or commit given with `--base REF`. Review pending changes before
+intentionally carrying them into a worker with `--with-changes`. The two
+flags do not combine.
 
 Read the JSON returned by the command and inspect each write worktree's diff.
+`firstchair delegate diff NAME` prints a write job's edits as one patch, new
+files included and carried work left out. `firstchair delegate apply NAME`
+stages that patch in the `--repo` checkout, or in the checkout given with
+`--to PATH`, and commits nothing. A patch that does not apply cleanly changes
+nothing. `collect` still commits the edits on the job's own branch.
+
+### Hide the lead's other files from a worker
+
+Every worker starts without the lead's secret-looking environment variables.
+It can still read files anywhere the provider's own sandbox allows, which for
+Codex and Grok is the whole home directory. `--confine` runs the worker
+inside bubblewrap and hides:
+
+- the project's main checkout and its other worktrees, apart from the Git
+  data, which stays readable and cannot be written
+- `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.netrc`,
+  `~/.npmrc`, `~/.config/gh`, browser profiles and similar stores
+- the other providers' homes and Firstchair's named sign-ins
+- every path given with `--hide PATH`, which may be repeated and implies
+  `--confine`
+
+The worker keeps its worktree, its own CLI's home and the rest of the
+system. This is a list of hidden places, not a list of allowed ones: name
+any other private directory with `--hide`. Without bubblewrap the run is
+refused. Checked with Codex CLI 0.171.0 and Grok Build 1.0.77 on Linux.
 The dispatcher saves job metadata locally and removes temporary prompt and
 provider output files when the invocation ends. Run
 `PYTHONPATH=src python -m unittest discover -s tests -v` before integrating.
@@ -212,8 +239,13 @@ The lead owns Git integration.
 
 Delegation uses the worker CLI's existing login and provider quota. Select an
 explicit worker to pass `--model` or `--effort`. Summaries report measured
-input and output tokens for a successful Codex run, and for a Claude worker
-reply the versioned parser accepts. Other usage is reported as unknown.
+input and output tokens for a successful Codex or Grok run, and for a Claude
+worker reply the versioned parser accepts. Other usage is reported as unknown.
+When the provider reports cached input, the summary adds
+`cached_input_tokens` and `total_input_tokens`. Codex counts cached input
+inside `input_tokens`; Claude and Grok count it beside. `total_input_tokens`
+is everything sent, cache included, so it is the figure to compare across
+providers.
 Automatic account selection, quota-based retries, and model optimization
 require provider contracts and policy beyond the dispatcher's PATH check.
 

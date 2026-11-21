@@ -40,13 +40,16 @@ from .delegation import (
     Terminated,
     _on_sigterm,
     check_name,
+    delegations_root,
     git,
+    ignore_state,
     launch_job,
     remove_worktree,
     repo_root,
     require_owner,
     session_id,
     resolve_seat,
+    state_root,
     worktree_root,
 )
 from .redaction import redact_record
@@ -183,11 +186,11 @@ def plan_score(
 
 
 def board_path(repo: Path, name: str) -> Path:
-    return repo / ".firstchair" / "conduct" / name / "board.json"
+    return state_root(repo) / ".firstchair" / "conduct" / name / "board.json"
 
 
 def _part_log(repo: Path, name: str) -> Path:
-    return repo / ".firstchair" / "delegations" / name
+    return delegations_root(repo) / name
 
 
 def _preflight(repo: Path, parts: tuple[Part, ...]) -> None:
@@ -343,6 +346,7 @@ def run_score(
     lock = None
     try:
         path.parent.mkdir(parents=True, mode=0o700)
+        ignore_state(path.parents[2])
         lock = _lock(path.parent)
         return _perform(
             repo, lead, name, parts, rows, with_changes, limit, allow_grok_write, session, rotate_accounts,

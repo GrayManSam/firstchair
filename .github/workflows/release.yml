@@ -93,7 +93,8 @@ jobs:
               installed_version = subprocess.check_output(
                   [cli, "--version"], cwd=workspace, env=environment, text=True, timeout=10,
               ).strip()
-              if installed_version != version:
+              # --version may add the build commit in brackets after the version.
+              if installed_version.split()[0] != version:
                   raise SystemExit(f"Expected version {version}, found {installed_version}")
 
               task = "Verify the synthetic handoff"

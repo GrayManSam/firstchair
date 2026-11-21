@@ -8,7 +8,7 @@ from functools import partial
 from pathlib import Path
 from typing import cast
 
-from . import __version__, accounts
+from . import accounts, describe_version
 from .config import read_synthetic_config
 from .conductor import configure_parser as configure_conduct_parser
 from .conductor import execute as execute_conduct
@@ -69,9 +69,19 @@ def _fallback_seat(text: str) -> tuple[str, str | None]:
     return name, profile or None
 
 
+class _Version(argparse.Action):
+    """Print the version on request only, so other commands never ask Git for the commit."""
+
+    def __call__(self, parser: argparse.ArgumentParser, *_: object) -> None:
+        print(describe_version())
+        parser.exit()
+
+
 def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
     parser = argparse.ArgumentParser(prog=prog)
-    parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument(
+        "--version", action=_Version, nargs=0, help="show the version and the commit it was built from",
+    )
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument(
         "--session",

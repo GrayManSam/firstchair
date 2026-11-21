@@ -170,7 +170,7 @@ class ConductorTests(unittest.TestCase):
             [("self", "grok"), ("auto", "codex"), ("claude", "claude")],
         )
         self.assertEqual(planned["parts"][1]["timeout_seconds"], 12.5)
-        self.assertEqual(planned["parts"][0]["timeout_seconds"], 600)
+        self.assertEqual(planned["parts"][0]["timeout_seconds"], 1800)
         self.assertNotIn(SENTINEL, output)
         self.assertFalse((self.repo / ".firstchair").exists())
         self.assertFalse((self.temp / "worktrees").exists())

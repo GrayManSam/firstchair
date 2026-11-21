@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- `delegate run --confine` runs the worker inside bubblewrap and hides the
+  project's other checkouts, common secret stores and the other providers'
+  files. `--hide PATH` hides more and implies `--confine`. The run is
+  refused when bubblewrap is missing.
+- `delegate diff NAME` prints a write job's edits as one patch, new files
+  included. `delegate apply NAME [--to PATH]` stages them in a checkout
+  without committing, and changes nothing when the patch does not apply.
+- `delegate run --base REF` starts the worktree from a branch, tag or
+  commit other than HEAD. It does not combine with `--with-changes`.
+- Grok delegate workers now report measured token usage. When a provider
+  reports cached input, summaries add `cached_input_tokens` and
+  `total_input_tokens`, the figure to compare across providers.
+- A delegate job's record now lives in the main checkout's
+  `.firstchair/delegations/NAME/`, also when `--repo` is a linked worktree,
+  and its worktree is filed under the project's name. `.firstchair/` gets
+  its own `.gitignore`, so it no longer shows in `git status`. Records and
+  worktrees from earlier builds are still found.
+- `delegate finish NAME` also removes the job's record, so the name can be
+  used again. It works on a read job or a stopped job that has no worktree
+  left, and refuses a job that is still running unless `--force` is given.
+- A job writes its record when it starts. `delegate list` adds `jobs`, with
+  each job's status and elapsed time: `running`, `completed`, `failed`,
+  `timeout`, `terminated`, or `abandoned` when its controller is gone. A
+  job stopped by SIGTERM used to leave an empty directory.
+- A worker that fails or times out reports the last 2,000 characters of its
+  stderr as `stderr_tail`. A write job that changes no file carries a warning.
+- `delegate run --output FILE` also writes the summary, reply included, to
+  a file only you can read.
+- Read jobs now default to 1,800 seconds, the same as write jobs. Real
+  reviews took up to 20 minutes against the old 600.
+- Delegate and conduct workers no longer inherit the lead's secrets. Every
+  worker's environment drops secret-looking names (`TOKEN`, `API_KEY`,
+  `_KEY`, `SECRET`, `PASSWORD`, `CREDENTIAL`), provider API keys, agent
+  sockets such as `SSH_AUTH_SOCK`, and `DATABASE_URL`. Before, only a
+  worker on a named login had provider keys removed.
+- The worker prompt names the repository it runs in and no longer tells
+  write workers to run Firstchair's own test command. Name the tests in the
+  task or in `AGENTS.md`.
+- `firstchair --version` adds the commit the copy was built from, for
+  example `0.1.0a2 (8b6ee39)`, so an out-of-date install is visible.
 - The primary seat can run a score with `firstchair conduct`. Seat `self`
   starts that seat's own provider. Seats `codex`, `claude`, and `grok` start
   those CLIs. Parts run one at a time in isolated worktrees, and a failed
