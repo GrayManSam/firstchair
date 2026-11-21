@@ -24,6 +24,9 @@ firstchair run --provider codex --reviewer claude --workspace . --format text \
   your MCP servers.
 - **Keeps going when a provider runs out of usage.** The run moves to the
   next provider or account you named and keeps the finished stages.
+- **Switches accounts on real usage.** Firstchair reads the percent used
+  from Codex and Claude Code and moves to the account with the most room
+  before a limit is hit.
 - **Everything stays local.** Run records live on your machine, with
   secret environment values redacted.
 - **Multi-agent development for maintainers.** `firstchair conduct` runs
@@ -108,6 +111,55 @@ firstchair run --provider claude --profile work --fallback claude:personal \
 
 Firstchair only uses accounts you signed in and named yourself. Check that
 your provider's terms allow the way you use more than one account.
+
+### Rotate across many accounts
+
+With `--rotate-accounts`, every named sign-in of the providers in the run
+joins a pool, up to 100 accounts. Before each stage Firstchair reads each
+account's real remaining usage, picks the account with the most room, and
+moves on before a provider refuses the work.
+
+```sh
+firstchair run --provider codex --reviewer claude --rotate-accounts "Review the parser"
+firstchair auth usage --refresh
+```
+
+Where the real numbers come from:
+
+| Provider | Real usage | How it is read |
+| --- | --- | --- |
+| Codex CLI | Percent used and reset time of the 5-hour and weekly windows | `codex app-server`, request `account/rateLimits/read`. No prompt is sent |
+| Claude Code | Utilization and reset time of the 5-hour and 7-day windows | The `rate_limit_event` Claude Code prints in `stream-json` mode. One short fixed prompt per reading, kept for 15 minutes |
+| Grok Build | Not available | `grok usage` only works inside an interactive Grok session. Firstchair counts its own calls and reacts to refusals |
+
+Firstchair asks the signed-in CLI. It does not open a credential file or
+call a provider's web API itself.
+
+| Option | Effect |
+| --- | --- |
+| `--account-switch-percent N` | Move off an account when a real usage window reaches N percent (default 90) |
+| `--account-token-limit N` | Also move off after N tokens sent by Firstchair in the window |
+| `--account-call-limit N` | Also move off after N stages in the window. Use it for Grok |
+| `--account-window SECONDS` | How far back the two counted limits look (default 18000, five hours) |
+| `--account-cooldown SECONDS` | How long an account rests after a usage failure with no reset time (default 3600) |
+
+How an account is chosen for a stage:
+
+1. An account is skipped while the provider reports a window full or
+   refuses it, and while it rests after a usage failure.
+2. Accounts under the switch point come before accounts at or past it. An
+   account past it still runs the stage when it is all that is left.
+3. Accounts of the provider that holds the role come first.
+4. The account the run is already using stays while it is under the
+   switch point.
+5. Otherwise the account with the lowest real percent used goes first.
+
+Readings, counts and rests are kept in one ledger for your user, shared by
+every checkout. It holds no task text and no account identifier beyond the
+profile name you chose. Each run record lists the accounts considered for
+every stage, their usage, and which one was picked. `firstchair auth usage`
+shows the ledger, and `firstchair auth clear-cooldown [ACCOUNT ...]` ends a
+rest early.
 
 `firstchair resume RUN_ID` continues an interrupted run, or a run that
 stopped because every named seat was out of usage, from the last finished

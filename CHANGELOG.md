@@ -21,6 +21,19 @@
   when the first is out of usage. `--fallback PROVIDER:PROFILE` names one
   directly. `firstchair resume --retry-exhausted` tries the skipped seats
   again, for example after a limit reset.
+- `firstchair run --rotate-accounts` pools every named sign-in of the
+  providers in the run, up to 100, and picks an account before each stage
+  from real usage. Codex usage is read with `codex app-server` request
+  `account/rateLimits/read`. Claude Code usage is read from the
+  `rate_limit_event` of a `stream-json` call, which sends one short fixed
+  prompt per reading. Grok Build has no reader and falls back to counted
+  calls and refusals. `--account-switch-percent` (default 90) sets when to
+  move off an account. A full window or a refusal rests the account until
+  its reset time. `--account-token-limit` and `--account-call-limit` add
+  budgets counted by Firstchair. The run record lists the accounts
+  considered for each stage. `firstchair auth usage [--refresh]` shows the
+  per-user ledger and `auth clear-cooldown` ends a rest.
+- Each saved stage records the profile that ran it.
 - The README is reorganized around what Firstchair is for, and the package
   metadata gains keywords, classifiers, and project links.
 - The saved roster records which seat leads and which reviews, so a resumed

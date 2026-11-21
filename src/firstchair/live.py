@@ -20,6 +20,7 @@ from typing import Any
 
 from .accounts import CREDENTIAL_OVERRIDES, HOME_VARIABLE, account_environment, profile_home
 from .fallback import is_transient
+from .rotation import Rotation, account_key
 from .claude_json import parse_claude_json
 from .codex_jsonl import parse_codex_jsonl
 from .grok_jsonl import parse_grok_jsonl
@@ -285,6 +286,8 @@ class LiveSession:
     stages: dict[str, dict[str, object]] = field(default_factory=dict)
     attempted: int = 0
     exhausted: list[dict[str, object]] = field(default_factory=list)
+    rotation: Rotation | None = None
+    selections: list[dict[str, object]] = field(default_factory=list)
 
     def seats(self) -> list[LiveProvider]:
         chosen: list[LiveProvider] = []
@@ -314,6 +317,10 @@ class LiveSession:
             elif plan is not None:
                 raise ValueError("invalid plan stage")
         self.exhausted = _saved_exhausted(record.get("exhausted", []))
+        saved = record.get("selection", [])
+        if not isinstance(saved, list) or not all(isinstance(item, dict) for item in saved):
+            raise ValueError("invalid selection record")
+        self.selections = list(saved)
         if "attempted" not in record:
             self.attempted = 0
         else:
@@ -348,15 +355,29 @@ class LiveSession:
 
     def _ask(self, stage: str, prompt: str, preferred: LiveProvider) -> str:
         seats = self._available(preferred)
+        candidates: list[dict[str, object]] | None = None
+        if self.rotation is not None and seats:
+            seats, candidates = self.rotation.choose(seats, preferred)
         if not seats:
-            code = self.exhausted[-1].get("error") if self.exhausted else "provider_unavailable"
+            code = self.exhausted[-1].get("error") if self.exhausted else (
+                "rate_limited" if candidates else "provider_unavailable"
+            )
             raise ProviderError(str(code))
+        if candidates is not None:
+            # Why this account: every candidate's standing when the stage began.
+            self.selections.append({
+                "stage": stage,
+                "account": account_key(seats[0].provider, seats[0].profile),
+                "candidates": candidates,
+            })
         error: ProviderError | None = None
         for seat in seats:
             self.attempted += 1
             try:
                 reply = seat.ask(prompt)
             except ProviderError as caught:
+                if self.rotation is not None:
+                    self.rotation.observe(seat, None, str(caught))
                 if not is_transient(str(caught)):
                     raise
                 self.exhausted.append({
@@ -367,6 +388,10 @@ class LiveSession:
                 })
                 error = caught
                 continue
+            if self.rotation is not None:
+                self.rotation.observe(seat, reply.usage, None)
+                if candidates is not None:
+                    self.selections[-1]["account"] = account_key(seat.provider, seat.profile)
             return self._record(stage, seat, reply)
         if error is None:
             raise ProviderError("provider_unavailable")
@@ -374,6 +399,7 @@ class LiveSession:
 
     def _record(self, stage: str, provider: LiveProvider, reply: Reply) -> str:
         self.stages[stage] = {
+            "profile": provider.profile,
             "provider": provider.provider,
             "version": provider.version,
             "text": reply.text,
@@ -395,7 +421,11 @@ class LiveSession:
         return self._ask("synthesize", prompt, self.lead)
 
     def details(self) -> dict[str, object]:
+        rotating: dict[str, object] = {}
+        if self.rotation is not None:
+            rotating = {"rotation": self.rotation.policy.as_record(), "selection": self.selections}
         return {
+            **rotating,
             "stages": self.stages,
             "usage": total_usage(self.stages, self.attempted),
             "roster": self.roster(),

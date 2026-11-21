@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import argparse
 
+from firstchair.accounts import account_environment
 from firstchair.cli import _fallback_seat, _print_text, _resume_session, main
 from firstchair.live import LiveSession, build_command, live_environment
 from firstchair.provider import ProviderError
@@ -318,6 +319,61 @@ class LiveCLITests(unittest.TestCase):
                 code = main(["--state-dir", str(self.state), "--session", "Bad Id", "run", "--provider", "codex", TASK])
             self.assertEqual(code, 1)
             self.assertIn("session must be", stderr.getvalue())
+
+    def test_rotation_spreads_stages_over_signed_in_accounts_and_resume_keeps_the_rules(self):
+        state = self.fixture / "xdg"
+        state.mkdir(mode=0o700)
+        self.enterContext(patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}))
+        # The invented CLIs are not asked for real usage here. test_rotation covers readings.
+        self.enterContext(patch("firstchair.cli._read_seat_quota", return_value=None))
+        for name in ("a", "b", "c", "d"):
+            account_environment("codex", name, create=True)
+        account_environment("claude", "unused", create=True)
+        stdout, _ = self.run_live("--rotate-accounts", "--account-call-limit", "1", "--dry-run", "--profile", "a")
+        planned = json.loads(stdout)
+        self.assertEqual(planned["rotation"]["call_limit"], 1)
+        self.assertEqual([item["account"] for item in planned["accounts"]],
+                         ["codex:a", "codex:b", "codex:c", "codex:d"])
+        self.assertFalse((state / "firstchair" / "account-ledger.json").exists())
+
+        stdout, _ = self.run_live("--rotate-accounts", "--account-call-limit", "1", "--profile", "a")
+        record = self.saved_record(stdout)
+        self.assertEqual(record["status"], "completed")
+        # One stage per account: each reaches its budget and the next one takes over.
+        self.assertEqual([record["stages"][stage]["profile"] for stage in ("plan", "review", "synthesize")],
+                         ["a", "b", "c"])
+        self.assertEqual([item["account"] for item in record["selection"]], ["codex:a", "codex:b", "codex:c"])
+        self.assertEqual(len(record["roster"]), 4)
+        self.assertNotIn(TASK, json.dumps(record["selection"]))
+        ledger = json.loads((state / "firstchair" / "account-ledger.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(ledger["accounts"]), ["codex:a", "codex:b", "codex:c"])
+        self.assertNotIn(TASK, json.dumps(ledger))
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(main(["auth", "usage"]), 0)
+        shown = {item["account"]: item for item in json.loads(out.getvalue())["accounts"]}
+        self.assertEqual(shown["codex:a"]["calls"], 1)
+        self.assertEqual((shown["codex:d"]["calls"], shown["claude:unused"]["status"]), (0, "ready"))
+
+        args = argparse.Namespace(
+            timeout=None, max_output_bytes=None, max_input_bytes=None, total_timeout=None,
+            workspace=None, provider=None, profile=None, reviewer=None, reviewer_profile=None,
+            fallback=None, retry_exhausted=False,
+        )
+        resumed = _resume_session(args, record)
+        self.assertEqual(resumed.rotation.policy.call_limit, 1)
+        self.assertEqual(len(resumed.seats()), 4)
+        self.assertEqual(len(resumed.selections), 3)
+        with self.assertRaisesRegex(ValueError, "rotation policy"):
+            _resume_session(args, {**record, "rotation": {"call_limit": 1}})
+        with self.assertRaisesRegex(ValueError, "too many"):
+            _resume_session(args, {key: value for key, value in record.items() if key != "rotation"})
+
+        _, error = self.run_live("--account-call-limit", "1", expected=1)
+        self.assertIn("require --rotate-accounts", error)
+        _, error = self.run_live("--fallback", "claude", "--fallback", "grok", "--fallback", "codex:b", expected=1)
+        self.assertIn("at most 3 providers", error)
 
     def test_timeout_kills_grandchild(self):
         with patch.dict(os.environ, {"FIRSTCHAIR_TEST_BEHAVIOR": "timeout"}):

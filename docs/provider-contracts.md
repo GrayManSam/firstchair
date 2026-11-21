@@ -47,6 +47,28 @@ Host findings on 2026-11-20 (Fedora 43):
   continues from the last saved stage after an interrupt or after every
   named provider was out of usage.
 
+## Real usage readers
+
+`firstchair run --rotate-accounts` and `firstchair auth usage --refresh` ask
+the signed-in CLI how much of an account is used. Firstchair does not open
+a credential file or call a provider web API itself. A reader that fails
+or returns an unexpected shape reports nothing, and the account falls back
+to counted usage.
+
+| Provider | Checked version | Command | Fields read |
+| --- | --- | --- | --- |
+| Codex CLI | 0.171.0 | `codex app-server`, newline-delimited JSON-RPC: `initialize`, `initialized`, then `account/rateLimits/read` | `rateLimits.primary` and `secondary`: `usedPercent`, `windowDurationMins`, `resetsAt`. `ordinaryUsageAllowed`. `accountId` is not kept |
+| Claude Code | 2.1.330 | `claude -p FIXED_PROMPT --tools "" --setting-sources "" --no-session-persistence --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format stream-json --verbose` | The last `rate_limit_event`: `rate_limit_info.status` and each `unifiedWindows` entry's `utilization` and `resetsAt`. A `result` with `api_error_status` 429 is a refusal |
+| Grok Build | 1.0.77 | None. `grok usage --json` answers that it cannot show plan usage outside an interactive session | None |
+
+The Codex shape matches the schema from `codex app-server generate-json-schema`,
+which marks the app server experimental. The Claude event was observed on
+one signed-in account on 2026-11-21 and is not in Claude Code's `--help`.
+Both readers were run on the development host against the default
+sign-ins. Rotation across several real accounts of one provider has not
+been run. The Claude reading sends a prompt, so it uses a little of the
+account and is refreshed at most every 15 minutes.
+
 ## Maintainer delegation workers
 
 `firstchair delegate` and `firstchair conduct` launch worker CLIs in a git

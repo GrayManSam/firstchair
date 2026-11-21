@@ -19,6 +19,8 @@ from .live import PROVIDERS as LIVE_PROVIDERS
 from .live import LiveLimits, LiveProvider, LiveSession, describe, readiness
 from .parallel import run_bounded
 from .provider import ExecutionLimits, ProviderError, SyntheticProvider
+from .quota import read_quota
+from .rotation import MAX_ACCOUNTS, Policy, Rotation, ledger_path, read_policy
 from .sessions import SESSION_ENV, require_owner, resolve_session
 from .state_listing import list_runs
 from .workflow import (
@@ -51,6 +53,10 @@ def default_state_dir() -> Path:
 def legacy_main(argv: list[str] | None = None) -> int:
     print(LEGACY_NOTICE, file=sys.stderr)
     return main(argv, prog="triadmux")
+
+
+def _read_seat_quota(seat: LiveProvider) -> object:
+    return read_quota(seat.provider, seat.profile)
 
 
 def _fallback_seat(text: str) -> tuple[str, str | None]:
@@ -86,6 +92,18 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
         "--fallback", action="append", type=_fallback_seat, default=None, metavar="PROVIDER[:PROFILE]",
         help="Extra provider, or a second named account, used when an earlier one is out of usage",
     )
+    run.add_argument(
+        "--rotate-accounts", action="store_true",
+        help="Use every named sign-in of the chosen providers and pick the best one for each stage",
+    )
+    run.add_argument(
+        "--account-switch-percent", type=int,
+        help="Move off an account when its real usage reaches this percent (default 90)",
+    )
+    run.add_argument("--account-token-limit", type=int, help="Move off an account after this many tokens in the window")
+    run.add_argument("--account-call-limit", type=int, help="Move off an account after this many stages in the window")
+    run.add_argument("--account-window", type=float, help="Seconds the limits look back (default 18000)")
+    run.add_argument("--account-cooldown", type=float, help="Seconds to rest an account that ran out of usage (default 3600)")
     run.add_argument("--workspace", type=Path, help="Directory live providers may read (default: an empty temp dir)")
     run.add_argument("--profile", help="Named account profile for the lead (see firstchair auth)")
     run.add_argument("--reviewer-profile", help="Named account profile for the reviewer")
@@ -165,13 +183,21 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
             if not args.task.strip():
                 raise ValueError("task must contain text")
             live = args.provider in LIVE_PROVIDERS
+            tuning = (
+                args.account_token_limit, args.account_call_limit, args.account_window, args.account_cooldown,
+                args.account_switch_percent,
+            )
             live_only = (
                 args.reviewer, args.workspace, args.profile, args.reviewer_profile, args.fallback,
+                args.rotate_accounts or None, *tuning,
             )
             if not live and any(value is not None for value in live_only):
                 raise ValueError(
-                    "--reviewer, --workspace, --profile and --fallback require a live --provider"
+                    "--reviewer, --workspace, --profile, --fallback and account rotation "
+                    "require a live --provider"
                 )
+            if not args.rotate_accounts and any(value is not None for value in tuning):
+                raise ValueError("the --account-* limits require --rotate-accounts")
             overrides = {
                 "timeout": args.timeout,
                 "max_output_bytes": args.max_output_bytes,
@@ -208,8 +234,32 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
                     for name, profile in (args.fallback or [])
                 )
                 session = LiveSession(lead, reviewer, extras)
-                if len(session.seats()) > 3:
-                    raise ValueError("at most 3 providers can share a run")
+                if args.rotate_accounts:
+                    policy = Policy(**{
+                        key: value for key, value in {
+                            "token_limit": args.account_token_limit,
+                            "call_limit": args.account_call_limit,
+                            "window_seconds": args.account_window,
+                            "cooldown_seconds": args.account_cooldown,
+                            "switch_percent": args.account_switch_percent,
+                        }.items() if value is not None
+                    })
+                    # Every named sign-in of a provider this run already names joins the pool.
+                    named = {seat.provider for seat in session.seats()}
+                    have = {(seat.provider, seat.profile) for seat in session.seats()}
+                    pool = tuple(
+                        LiveProvider(item["provider"], limits, args.workspace, item["profile"], deadline)
+                        for item in accounts.list_profiles()
+                        if item["provider"] in named and (item["provider"], item["profile"]) not in have
+                    )
+                    session = LiveSession(
+                        lead, reviewer, extras + pool,
+                        rotation=Rotation(ledger_path(), policy, reader=_read_seat_quota),
+                    )
+                    if len(session.seats()) > MAX_ACCOUNTS:
+                        raise ValueError(f"at most {MAX_ACCOUNTS} accounts can share a run")
+                elif len(session.seats()) > 3:
+                    raise ValueError("at most 3 providers can share a run; add --rotate-accounts for more")
                 stages = (session.plan, session.review, session.synthesize)
                 details = session.details
             elif args.provider:
@@ -235,6 +285,10 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
                     "roles": describe({"lead": lead, "reviewer": reviewer}),
                     "stages": {"plan": "lead", "review": "reviewer", "synthesize": "lead"},
                     "failover": [seat.provider for seat in session.seats()],
+                    **({
+                        "rotation": session.rotation.policy.as_record(),
+                        "accounts": session.rotation.choose(session.seats(), lead)[1],
+                    } if session.rotation is not None else {}),
                     "limits": {
                         "stage_timeout": limits.timeout,
                         "stage_output_bytes": limits.output_bytes,
@@ -456,8 +510,12 @@ def _resume_session(args: argparse.Namespace, record: dict[str, object]) -> Live
             unique.append(spec)
     if not unique:
         raise ValueError("resume needs --provider when the run has no roster")
-    if len(unique) > 3:
-        raise ValueError("at most 3 providers can share a run")
+    rotation = None
+    if "rotation" in record:
+        # The run was started with account rotation. Keep its rules.
+        rotation = Rotation(ledger_path(), read_policy(record["rotation"]), reader=_read_seat_quota)
+    if len(unique) > (MAX_ACCOUNTS if rotation is not None else 3):
+        raise ValueError("too many providers or accounts share this run")
     seats = {
         spec: LiveProvider(spec[0], limits, workspace, spec[1], deadline) for spec in unique
     }
@@ -469,7 +527,7 @@ def _resume_session(args: argparse.Namespace, record: dict[str, object]) -> Live
         lead = seats[unique[0]]
         reviewer = seats[unique[1]] if len(unique) > 1 else lead
     extras = tuple(seat for seat in seats.values() if seat is not lead and seat is not reviewer)
-    session = LiveSession(lead, reviewer, extras)
+    session = LiveSession(lead, reviewer, extras, rotation=rotation)
     session.restore(record)
     if args.retry_exhausted:
         session.exhausted = []
