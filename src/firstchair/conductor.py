@@ -709,7 +709,7 @@ def _status(args: argparse.Namespace) -> int:
 def configure_parser(root: argparse.ArgumentParser) -> None:
     root.add_argument("--repo", help="Repository path (default: current checkout)")
     root.add_argument(
-        "--session",
+        "--session", default=argparse.SUPPRESS,
         help="This lead session's ID (default: $FIRSTCHAIR_SESSION; run makes one when unset)",
     )
     commands = root.add_subparsers(dest="conduct_command", required=True)

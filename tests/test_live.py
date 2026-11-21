@@ -9,7 +9,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from firstchair.cli import _print_text, main
+import argparse
+
+from firstchair.cli import _print_text, _resume_session, main
 from firstchair.live import LiveSession, build_command, live_environment
 from firstchair.provider import ProviderError
 from firstchair.usage import Reply, Usage
@@ -165,9 +167,11 @@ class LiveCLITests(unittest.TestCase):
     def cli(self, *args, expected=0):
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            code = main(["--state-dir", str(self.state), *args])
+            code = main(["--state-dir", str(self.state), "--session", self.session, *args])
         self.assertEqual(code, expected, stderr.getvalue() or stdout.getvalue())
         return stdout.getvalue(), stderr.getvalue()
+
+    session = "fixture-session"
 
     def run_live(self, *options, provider="codex", expected=0):
         return self.cli("run", "--provider", provider, *options, TASK, expected=expected)
@@ -266,6 +270,55 @@ class LiveCLITests(unittest.TestCase):
         new_calls = [call for call in self.calls()[before:] if "--version" not in call["args"]]
         self.assertEqual([call["provider"] for call in new_calls], ["codex", "codex", "codex"])
 
+    def test_resume_retries_a_retired_provider_only_when_asked(self):
+        with patch.dict(os.environ, {"FIRSTCHAIR_TEST_BEHAVIOR": "claude_429"}):
+            stdout, _ = self.run_live(provider="claude", expected=1)
+        failed = self.saved_record(stdout)
+        before = len(self.calls())
+        # The limit has reset, but the run still treats Claude as retired.
+        stdout, _ = self.cli("resume", failed["run_id"], expected=1)
+        again = self.saved_record(stdout)
+        self.assertEqual((again["status"], again["error"]), ("failed", "rate_limited"))
+        self.assertEqual(len(self.calls()), before)
+        stdout, _ = self.cli("resume", failed["run_id"], "--retry-exhausted")
+        record = self.saved_record(stdout)
+        self.assertEqual(record["status"], "completed")
+        self.assertEqual(record["exhausted"], [])
+        self.assertEqual([data["provider"] for data in record["stages"].values()], ["claude"] * 3)
+
+    def test_another_session_cannot_resume_or_recover_a_run(self):
+        with patch.dict(os.environ, {"FIRSTCHAIR_TEST_BEHAVIOR": "claude_429"}):
+            stdout, _ = self.run_live(provider="claude", expected=1)
+        failed = self.saved_record(stdout)
+        self.assertEqual(failed["session"], "fixture-session")
+        before = len(self.calls())
+        self.session = "other-session"
+        for command in (("resume", failed["run_id"], "--retry-exhausted"), ("recover", failed["run_id"])):
+            _, error = self.cli(*command, expected=1)
+            self.assertIn("belongs to session fixture-session", error)
+        # Reading is allowed, and the listing names the owner.
+        stdout, _ = self.cli("status", failed["run_id"], expected=1)
+        self.assertEqual(json.loads(stdout), failed)
+        stdout, _ = self.cli("runs")
+        self.assertEqual(json.loads(stdout)["runs"][0]["session"], "fixture-session")
+        self.assertEqual(len(self.calls()), before)
+        self.session = "fixture-session"
+        self.cli("resume", failed["run_id"], "--retry-exhausted")
+
+    def test_a_run_without_a_session_makes_one(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        environment = {key: value for key, value in os.environ.items() if key != "FIRSTCHAIR_SESSION"}
+        with patch.dict(os.environ, environment, clear=True):
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = main(["--state-dir", str(self.state), "run", "--provider", "codex", TASK])
+            self.assertEqual(code, 0, stderr.getvalue())
+            made = json.loads(stdout.getvalue())["session"]
+            self.assertRegex(made, r"^s-[0-9a-f]{12}$")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+                code = main(["--state-dir", str(self.state), "--session", "Bad Id", "run", "--provider", "codex", TASK])
+            self.assertEqual(code, 1)
+            self.assertIn("session must be", stderr.getvalue())
+
     def test_timeout_kills_grandchild(self):
         with patch.dict(os.environ, {"FIRSTCHAIR_TEST_BEHAVIOR": "timeout"}):
             stdout, _ = self.run_live("--timeout", "1", expected=1)
@@ -341,18 +394,56 @@ class _Seat:
 
 
 class LiveFailoverTests(unittest.TestCase):
-    def test_second_account_finishes_when_the_first_is_out_of_usage(self):
+    def test_a_second_account_of_the_same_provider_does_not_take_over(self):
         empty = _Seat("claude", "work", [ProviderError("rate_limited")])
         reserve = _Seat("claude", "personal", ["plan", "review", "result"])
+        other = _Seat("codex", replies=["plan", "review", "result"])
         session = LiveSession(empty, reserve)
-        self.assertEqual(session.plan("task"), "plan")
-        self.assertEqual(session.review("plan"), "review")
-        self.assertEqual(session.synthesize("review"), "result")
+        with self.assertRaisesRegex(ProviderError, "^rate_limited$"):
+            session.plan("task")
         self.assertEqual(len(empty.prompts), 1)
-        self.assertEqual(len(reserve.prompts), 3)
+        self.assertEqual(reserve.prompts, [])
         self.assertEqual(session.exhausted, [{
             "provider": "claude", "profile": "work", "error": "rate_limited", "stage": "plan",
         }])
+        # A different provider still takes over, and the second account stays retired.
+        empty = _Seat("claude", "work", [ProviderError("rate_limited")])
+        session = LiveSession(empty, reserve, (other,))
+        self.assertEqual(session.synthesize(session.review(session.plan("task"))), "result")
+        self.assertEqual(reserve.prompts, [])
+        self.assertEqual(len(other.prompts), 3)
+
+    def test_roster_records_roles_and_resume_keeps_them(self):
+        lead, extra = _Seat("codex"), _Seat("grok")
+        session = LiveSession(lead, lead, (extra,))
+        self.assertEqual(session.roster(), [
+            {"provider": "codex", "profile": None, "roles": ["lead", "reviewer"]},
+            {"provider": "grok", "profile": None, "roles": []},
+        ])
+        args = argparse.Namespace(
+            timeout=None, max_output_bytes=None, max_input_bytes=None, total_timeout=None,
+            workspace=None, provider="claude", profile=None, reviewer=None, reviewer_profile=None,
+            fallback=None, retry_exhausted=False,
+        )
+        resumed = _resume_session(args, {"task": "task", "roster": session.roster()})
+        # The fallback seat does not become the reviewer, and the new provider is an extra.
+        self.assertEqual((resumed.lead.provider, resumed.reviewer.provider), ("codex", "codex"))
+        self.assertIs(resumed.lead, resumed.reviewer)
+        self.assertEqual([seat.provider for seat in resumed.extras], ["grok", "claude"])
+        split = LiveSession(_Seat("codex"), _Seat("claude"), (_Seat("grok"),)).roster()
+        args.provider = None
+        resumed = _resume_session(args, {"task": "task", "roster": split})
+        self.assertEqual((resumed.lead.provider, resumed.reviewer.provider), ("codex", "claude"))
+        self.assertEqual([seat.provider for seat in resumed.extras], ["grok"])
+        for label, roster in (
+            ("unknown role", [{"provider": "codex", "profile": None, "roles": ["owner"]}]),
+            ("two leads", [{"provider": "codex", "profile": None, "roles": ["lead", "reviewer"]},
+                           {"provider": "grok", "profile": None, "roles": ["lead"]}]),
+            ("no reviewer", [{"provider": "codex", "profile": None, "roles": ["lead"]}]),
+            ("not a list", [{"provider": "codex", "profile": None, "roles": "lead"}]),
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, "roster"):
+                _resume_session(args, {"task": "task", "roster": roster})
 
     def test_timeout_and_unavailable_also_fall_through(self):
         for code in ("provider_timeout", "provider_unavailable"):

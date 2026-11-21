@@ -15,6 +15,15 @@
 - A part can set `"after"` to the name of an earlier part. Its prompt then
   includes that part's reply, marked as untrusted output and cut at 32,000
   characters. The reply stays in memory. The board stores only the name.
+- `firstchair run` records its lead session. `resume` and `recover` are
+  refused from a different session. `runs` shows each owner.
+- A provider that is out of usage is retired for the run together with any
+  other account of that provider. A run no longer moves to a second account
+  of the same provider. `firstchair resume --retry-exhausted` tries retired
+  providers again, for example after a limit reset.
+- The saved roster records which seat leads and which reviews, so a resumed
+  run keeps the same roles. Providers named on resume are extra seats.
+- Removed the unused `fallback.run_stage` helper.
 - Every score and delegate job records the lead session that started it.
   Pass `--session ID` or set `FIRSTCHAIR_SESSION`. `delegate run` and
   `conduct run` make an ID when none is given and print it. `conduct

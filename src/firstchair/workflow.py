@@ -12,6 +12,7 @@ from .fallback import is_transient
 from .handoff import WorkerReview, read_review, review_assignment, review_text
 from .provider import ProviderError
 from .redaction import redact_record
+from .sessions import require_owner
 
 STAGES = ("plan", "review", "synthesize")
 
@@ -69,7 +70,9 @@ def _run_lock(path: Path, *, create: bool) -> Iterator[None]:
         os.close(lock)
 
 
-def recover_workflow(state_dir: Path, run_id: str) -> dict[str, object]:
+def recover_workflow(
+    state_dir: Path, run_id: str, *, session: str | None = None,
+) -> dict[str, object]:
     """Mark an abandoned run interrupted without replaying its work."""
     path = record_path(state_dir, run_id)
     with _run_lock(path, create=False):
@@ -81,6 +84,7 @@ def recover_workflow(state_dir: Path, run_id: str) -> dict[str, object]:
             or record.get("run_id") != run_id
         ):
             raise ValueError("invalid or unsupported run record")
+        require_owner(record.get("session"), session, f"run {run_id}")
         if record.get("status") != "running":
             raise ValueError("only running records can be recovered")
         record.update(status="interrupted", error="controller_crash")
@@ -93,11 +97,14 @@ def run_workflow[Review: (str, WorkerReview)](
     plan: Callable[[str], str], review: Callable[[str], Review], synthesize: Callable[[Review], str],
     *, details: Callable[[], dict[str, object]] | None = None,
     provider: str = "demo", prelude: dict[str, object] | None = None,
+    session: str | None = None,
 ) -> dict[str, object]:
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     run_id = str(uuid4())
     path = record_path(state_dir, run_id)
     record = _new_record(run_id, task, provider)
+    if session is not None:
+        record["session"] = session
     if prelude:
         record.update(prelude)
     with _run_lock(path, create=True):
@@ -109,6 +116,7 @@ def continue_workflow[Review: (str, WorkerReview)](
     state_dir: Path, run_id: str,
     plan: Callable[[str], str], review: Callable[[str], Review], synthesize: Callable[[Review], str],
     *, details: Callable[[], dict[str, object]] | None = None,
+    session: str | None = None,
 ) -> dict[str, object]:
     """Finish an interrupted, abandoned, or usage-failed run from its saved stages."""
     path = record_path(state_dir, run_id)
@@ -121,6 +129,7 @@ def continue_workflow[Review: (str, WorkerReview)](
             or record.get("run_id") != run_id
         ):
             raise ValueError("invalid or unsupported run record")
+        require_owner(record.get("session"), session, f"run {run_id}")
         status = record.get("status")
         if status == "completed":
             raise ValueError("a completed run cannot be resumed")

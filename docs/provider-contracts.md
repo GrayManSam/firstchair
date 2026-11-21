@@ -38,7 +38,8 @@ Host findings on 2026-11-20 (Fedora 43):
   Firstchair reports `rate_limited`. A successful 2.1.329 reply on this host
   is still unverified, so the Claude success path relies on the documented
   envelope. `rate_limited`, `provider_unavailable`, and `provider_timeout`
-  retire that seat for the rest of the run. The next named provider, from
+  retire that provider for the rest of the run, including a second account
+  of it. `firstchair resume --retry-exhausted` clears that. The next named provider, from
   `--reviewer` or `--fallback`, finishes the current stage and any stage
   that seat would have done. A single remaining provider completes the run.
   `authorization_failed` and every other code stop the run. `firstchair resume`

@@ -72,7 +72,18 @@ can become one and still finish. A login or authorization failure stops
 the run instead of switching providers. `firstchair resume RUN_ID`
 continues an interrupted run, or a run that stopped because every named
 provider was out of usage, from the last finished stage. Add `--provider`
-on resume to hand the remainder to a provider that still has usage.
+on resume to hand the remainder to a provider that still has usage. A
+resumed run keeps the same lead and reviewer.
+
+A skipped provider stays retired for that run, including any other account
+of the same provider. Firstchair does not move to a second account to get
+past a limit. After the limit resets, `firstchair resume RUN_ID
+--retry-exhausted` tries the retired providers again.
+
+Each run records the lead session that started it. Pass `--session ID`
+before the command or set `FIRSTCHAIR_SESSION`. `run` makes an ID when none
+is given and prints it. `resume` and `recover` are refused from a different
+session. `status` and `runs` work from any session.
 Unknown provider versions are refused before a run starts.
 
 ## Offline demo

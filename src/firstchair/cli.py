@@ -19,6 +19,7 @@ from .live import PROVIDERS as LIVE_PROVIDERS
 from .live import LiveLimits, LiveProvider, LiveSession, describe, readiness
 from .parallel import run_bounded
 from .provider import ExecutionLimits, ProviderError, SyntheticProvider
+from .sessions import SESSION_ENV, require_owner, resolve_session
 from .state_listing import list_runs
 from .workflow import (
     continue_workflow,
@@ -56,6 +57,10 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--state-dir", type=Path)
+    parser.add_argument(
+        "--session",
+        help=f"This lead session's ID (default: ${SESSION_ENV}; run makes one when unset)",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     doctor = commands.add_parser("doctor", help="Discover providers and check their versions")
     doctor.add_argument("--offline", action="store_true", help="Only search PATH; do not run --version")
@@ -92,6 +97,10 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
     resume.add_argument("--provider", choices=LIVE_PROVIDERS, help="Provider to add when the saved ones are exhausted")
     resume.add_argument("--reviewer", choices=LIVE_PROVIDERS)
     resume.add_argument("--fallback", action="append", choices=LIVE_PROVIDERS, default=None)
+    resume.add_argument(
+        "--retry-exhausted", action="store_true",
+        help="Try the providers this run retired again, for example after a limit reset",
+    )
     resume.add_argument("--workspace", type=Path)
     resume.add_argument("--profile")
     resume.add_argument("--reviewer-profile")
@@ -254,11 +263,14 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
                     args.task, args.state_dir, *stages, details=details,
                     provider=args.provider or "demo",
                     prelude=session.details() if live else None,
+                    session=resolve_session(args.session, create=True),
                 )
         elif args.command == "resume":
             result = _resume(args)
         elif args.command == "recover":
-            result = recover_workflow(args.state_dir, args.run_id)
+            result = recover_workflow(
+                args.state_dir, args.run_id, session=resolve_session(args.session),
+            )
         elif args.command == "runs":
             result = {"runs": list_runs(args.state_dir)}
         else:
@@ -315,6 +327,9 @@ def _resume(args: argparse.Namespace) -> dict[str, object]:
     record = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(record, dict):
         raise ValueError("invalid run record")
+    owner = resolve_session(args.session)
+    # Checked again under the run lock. This check stops before any provider probe.
+    require_owner(record.get("session"), owner, f"run {args.run_id}")
     provider_name = record.get("provider")
     live_request = any(
         value is not None
@@ -324,14 +339,14 @@ def _resume(args: argparse.Namespace) -> dict[str, object]:
         )
     )
     if provider_name == "demo":
-        if live_request:
-            raise ValueError("a demo run cannot add a live provider")
+        if live_request or args.retry_exhausted:
+            raise ValueError("a demo run cannot add or retry a live provider")
         return continue_workflow(
-            args.state_dir, args.run_id, demo_plan, demo_review, demo_synthesize,
+            args.state_dir, args.run_id, demo_plan, demo_review, demo_synthesize, session=owner,
         )
     if provider_name == "synthetic":
-        if live_request:
-            raise ValueError("a synthetic run cannot add a live provider")
+        if live_request or args.retry_exhausted:
+            raise ValueError("a synthetic run cannot add or retry a live provider")
         overrides = {
             key: value for key, value in {
                 "timeout": args.timeout,
@@ -348,13 +363,13 @@ def _resume(args: argparse.Namespace) -> dict[str, object]:
         )
         synthetic = SyntheticProvider(limits, total_timeout=overrides.get("total_timeout"))
         stages = tuple(partial(synthetic.run, stage) for stage in STAGES)
-        return continue_workflow(args.state_dir, args.run_id, *stages)
+        return continue_workflow(args.state_dir, args.run_id, *stages, session=owner)
     if provider_name not in LIVE_PROVIDERS:
         raise ValueError("run has no saved provider")
     session = _resume_session(args, record)
-    spent = {(item.get("provider"), item.get("profile")) for item in session.exhausted}
+    spent = session.spent()
     for seat in session.seats():
-        if (seat.provider, seat.profile) in spent:
+        if seat.provider in spent:
             continue
         try:
             seat.prepare()
@@ -365,6 +380,7 @@ def _resume(args: argparse.Namespace) -> dict[str, object]:
     return continue_workflow(
         args.state_dir, args.run_id,
         session.plan, session.review, session.synthesize, details=session.details,
+        session=owner,
     )
 
 
@@ -393,6 +409,7 @@ def _resume_session(args: argparse.Namespace, record: dict[str, object]) -> Live
         if isinstance(saved, str) and Path(saved).is_dir():
             workspace = Path(saved)
     specs: list[tuple[str, str | None]] = []
+    saved_roles: dict[str, tuple[str, str | None]] = {}
     roster = record.get("roster")
     if isinstance(roster, list):
         for item in roster:
@@ -404,7 +421,16 @@ def _resume_session(args: argparse.Namespace, record: dict[str, object]) -> Live
                 raise ValueError("invalid provider roster")
             if profile is not None and not isinstance(profile, str):
                 raise ValueError("invalid provider roster")
+            roles = item.get("roles", [])
+            if not isinstance(roles, list) or any(role not in ("lead", "reviewer") for role in roles):
+                raise ValueError("invalid provider roster")
+            for role in roles:
+                if role in saved_roles:
+                    raise ValueError("invalid provider roster")
+                saved_roles[role] = (name, profile)
             specs.append((name, profile))
+    if saved_roles and set(saved_roles) != {"lead", "reviewer"}:
+        raise ValueError("invalid provider roster")
     if args.provider is not None:
         specs.append((args.provider, args.profile))
     if args.reviewer is not None:
@@ -421,10 +447,19 @@ def _resume_session(args: argparse.Namespace, record: dict[str, object]) -> Live
         raise ValueError("resume needs --provider when the run has no roster")
     if len(unique) > 3:
         raise ValueError("at most 3 providers can share a run")
-    seats = [
-        LiveProvider(name, limits, workspace, profile, deadline) for name, profile in unique
-    ]
-    reviewer = seats[1] if len(seats) > 1 else seats[0]
-    session = LiveSession(seats[0], reviewer, tuple(seats[2:]))
+    seats = {
+        spec: LiveProvider(spec[0], limits, workspace, spec[1], deadline) for spec in unique
+    }
+    if saved_roles:
+        # Providers named on resume are extra seats. The saved roles stay put.
+        lead, reviewer = seats[saved_roles["lead"]], seats[saved_roles["reviewer"]]
+    else:
+        # A roster saved without roles: first seat leads, second reviews.
+        lead = seats[unique[0]]
+        reviewer = seats[unique[1]] if len(unique) > 1 else lead
+    extras = tuple(seat for seat in seats.values() if seat is not lead and seat is not reviewer)
+    session = LiveSession(lead, reviewer, extras)
     session.restore(record)
+    if args.retry_exhausted:
+        session.exhausted = []
     return session

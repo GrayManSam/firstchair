@@ -20,7 +20,6 @@ import json
 import math
 import os
 import re
-import secrets
 import shutil
 import signal
 import subprocess
@@ -37,6 +36,7 @@ from .claude_json import parse_claude_json
 from .codex_jsonl import CodexUsage, parse_codex_jsonl
 from .provider import ProviderError
 from .redaction import redact_record
+from .sessions import SESSION_ENV, require_owner, resolve_session
 from .versions import read_version
 
 DESCRIPTION = "Dispatch a bounded task to a Codex, Claude Code, or Grok worker in a git worktree."
@@ -98,37 +98,9 @@ class DelegateError(Exception):
     """A usage or environment problem reported without a traceback."""
 
 
-SESSION_ENV = "FIRSTCHAIR_SESSION"
-
-
 def session_id(args: argparse.Namespace, *, create: bool = False) -> str | None:
-    """The lead session's ID from --session, else FIRSTCHAIR_SESSION.
-
-    A command that starts work makes a new ID when none was given, and prints
-    it. A command that acts on existing work never invents one.
-    """
-    given = getattr(args, "session", None) or os.environ.get(SESSION_ENV)
-    if given:
-        if not NAME_PATTERN.fullmatch(given):
-            raise DelegateError("session must be 1-63 characters of a-z, 0-9, '.', '_' or '-'")
-        return given
-    return "s-" + secrets.token_hex(6) if create else None
-
-
-def require_owner(owner: object, session: str | None, what: str) -> None:
-    """Refuse to act on work that another lead session started.
-
-    The ID is a guard against mix-ups between sessions sharing a checkout. It
-    is not a secret. Work recorded before sessions existed has no owner.
-    """
-    if owner is None:
-        return
-    if not isinstance(owner, str) or not NAME_PATTERN.fullmatch(owner):
-        raise DelegateError(f"{what} has an unreadable session ID")
-    if session != owner:
-        raise DelegateError(
-            f"{what} belongs to session {owner}; pass --session {owner} to act on it"
-        )
+    """The lead session's ID from --session, else FIRSTCHAIR_SESSION."""
+    return resolve_session(getattr(args, "session", None), create=create)
 
 
 def job_session(repo: Path, name: str) -> object:
@@ -734,7 +706,7 @@ def finish(args: argparse.Namespace) -> int:
 def configure_parser(root: argparse.ArgumentParser) -> None:
     root.add_argument("--repo", help="Repository path (default: current checkout)")
     root.add_argument(
-        "--session",
+        "--session", default=argparse.SUPPRESS,
         help=f"This lead session's ID (default: ${SESSION_ENV}; run makes one when unset)",
     )
     commands = root.add_subparsers(dest="delegate_command", required=True)

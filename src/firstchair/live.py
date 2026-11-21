@@ -272,7 +272,9 @@ class LiveSession:
 
     A seat that is out of usage, unavailable, or timed out is skipped. The
     next named seat finishes that stage and the ones that follow. One
-    remaining seat can do the whole run.
+    remaining seat can do the whole run. Exhaustion retires the provider,
+    not only the account, so a run never moves to a second account of the
+    same provider to get past a limit.
     """
 
     lead: LiveProvider
@@ -320,9 +322,25 @@ class LiveSession:
                 raise ValueError("invalid attempt count")
             self.attempted = attempted
 
+    def spent(self) -> set[object]:
+        """Providers retired for this run."""
+        return {item.get("provider") for item in self.exhausted}
+
+    def roster(self) -> list[dict[str, object]]:
+        """Each seat with the roles it holds, so a resume keeps the same roles."""
+        entries = []
+        for seat in self.seats():
+            key = (seat.provider, seat.profile)
+            roles = [
+                role for role, holder in (("lead", self.lead), ("reviewer", self.reviewer))
+                if (holder.provider, holder.profile) == key
+            ]
+            entries.append({"provider": seat.provider, "profile": seat.profile, "roles": roles})
+        return entries
+
     def _available(self, preferred: LiveProvider) -> list[LiveProvider]:
-        spent = {(item.get("provider"), item.get("profile")) for item in self.exhausted}
-        available = [seat for seat in self.seats() if (seat.provider, seat.profile) not in spent]
+        spent = self.spent()
+        available = [seat for seat in self.seats() if seat.provider not in spent]
         key = (preferred.provider, preferred.profile)
         return [seat for seat in available if (seat.provider, seat.profile) == key] + [
             seat for seat in available if (seat.provider, seat.profile) != key
@@ -335,6 +353,8 @@ class LiveSession:
             raise ProviderError(str(code))
         error: ProviderError | None = None
         for seat in seats:
+            if seat.provider in self.spent():
+                continue  # Retired by an earlier seat in this same stage.
             self.attempted += 1
             try:
                 reply = seat.ask(prompt)
@@ -380,9 +400,7 @@ class LiveSession:
         return {
             "stages": self.stages,
             "usage": total_usage(self.stages, self.attempted),
-            "roster": [
-                {"provider": seat.provider, "profile": seat.profile} for seat in self.seats()
-            ],
+            "roster": self.roster(),
             "exhausted": self.exhausted,
             "attempted": self.attempted,
             "task": self.task,

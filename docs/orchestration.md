@@ -78,8 +78,12 @@ firstchair delegate --session claude-parser finish parser --delete-branch
 The ID prevents mix-ups. It is not a secret and does not control access.
 Any session can read another's ID and pass it on purpose. Score names, job
 names, worktrees, and branches are still shared across sessions, so a name
-already in use is refused. `firstchair run` records have their own run IDs
-and locks and do not carry a session ID.
+already in use is refused.
+
+`firstchair run` records the session too. Pass `--session ID` before the
+command. `firstchair resume` and `firstchair recover` are refused from a
+different session. `firstchair status` and `firstchair runs` are read-only
+and show the owner.
 
 ## Conductor score
 
