@@ -127,6 +127,13 @@ class DelegateTests(unittest.TestCase):
             self.assertEqual(delegate.select_worker("auto", "claude", "read"), "codex")
             with self.assertRaisesRegex(delegate.DelegateError, "no eligible read worker"):
                 delegate.select_worker("auto", "codex", "read")
+        # Automatic write selection never reaches Grok, whichever seat leads.
+        with mock.patch.object(delegate.shutil, "which", side_effect={"grok": "/fake/grok"}.get):
+            for lead in ("claude", "codex"):
+                with self.assertRaisesRegex(delegate.DelegateError, "no eligible write worker"):
+                    delegate.select_worker("auto", lead, "write")
+        for order in delegate.WORKER_ORDER.values():
+            self.assertNotIn("grok", order["write"])
 
     def test_unknown_codex_version_does_not_report_usage(self):
         with mock.patch.dict(os.environ, {"FAKE_CODEX_VERSION": "0.0.0"}):
@@ -182,7 +189,17 @@ class DelegateTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["reply"], "## Summary\nfake grok mode read")
 
-        code, out, _ = self._main("run", "grok", "Edit", "--mode", "write", "--name", "g-write")
+        for extra in ((), ("--dry-run",)):
+            code, out, error = self._main("run", "grok", "Edit", "--mode", "write", "--name", "g-write", *extra)
+            self.assertEqual(code, 2)
+            self.assertEqual(out, "")
+            self.assertIn("--allow-grok-write", error)
+        self.assertEqual(self._git("branch", "--list", "delegate/*").strip(), "")
+        self.assertFalse((self.repo / ".firstchair" / "delegations" / "g-write").exists())
+
+        code, out, _ = self._main(
+            "run", "grok", "Edit", "--mode", "write", "--name", "g-write", "--allow-grok-write",
+        )
         summary = json.loads(out)
         self.assertEqual(code, 0)
         self.assertIn("M README.md", summary["changes"]["status"])
@@ -293,6 +310,7 @@ class DelegateTests(unittest.TestCase):
         self.assertFalse(use_stdin)
         self.assertEqual(argv[argv.index("--sandbox") + 1], "workspace")
         self.assertIn("--disallowed-tools", argv)
+        self.assertIn("--no-subagents", argv)
 
 
 if __name__ == "__main__":

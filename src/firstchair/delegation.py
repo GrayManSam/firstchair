@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dispatch a bounded task from a lead agent session to a Codex or Grok worker.
+"""Dispatch a bounded task from a lead agent session to a Codex, Claude, or Grok worker.
 
 Each task runs headless in its own git worktree outside the checkout, so a
 worker never touches the lead's working tree. A ``read`` task runs in a
@@ -15,6 +15,7 @@ Job metadata goes to the ignored ``.firstchair/delegations/NAME/`` directory.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -24,25 +25,34 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
 from .accounts import account_environment
+from .claude_json import parse_claude_json
 from .codex_jsonl import CodexUsage, parse_codex_jsonl
 from .provider import ProviderError
 from .redaction import redact_record
+from .versions import read_version
 
-DESCRIPTION = "Dispatch a bounded task to a Codex or Grok worker in a git worktree."
-PROVIDERS = ("codex", "grok")
+DESCRIPTION = "Dispatch a bounded task to a Codex, Claude Code, or Grok worker in a git worktree."
+PROVIDERS = ("codex", "claude", "grok")
 LEAD_NAMES = {"claude": "Claude Code", "codex": "Codex", "grok": "Grok Build"}
+# auto never selects the lead. self is the explicit request for the lead's own provider.
 WORKER_ORDER = {
-    "claude": {"read": ("grok", "codex"), "write": ("codex", "grok")},
-    "codex": {"read": ("grok",), "write": ("grok",)},
-    "grok": {"read": ("codex",), "write": ("codex",)},
+    # Automatic write selection never picks Grok. See GROK_WRITE_REFUSAL.
+    "claude": {"read": ("grok", "codex"), "write": ("codex",)},
+    "codex": {"read": ("grok", "claude"), "write": ("claude",)},
+    "grok": {"read": ("codex", "claude"), "write": ("codex", "claude")},
 }
 MODES = ("read", "write")
+GROK_WRITE_REFUSAL = (
+    "a Grok write worker runs with permission prompts bypassed, terminal commands and "
+    "network access; pass --allow-grok-write to accept that for this run"
+)
 BRANCH_PREFIX = "delegate/"
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 DEFAULT_TIMEOUT = {"read": 600, "write": 1800}
@@ -174,6 +184,31 @@ def build_command(job: Job, prompt_file: Path, reply_file: Path) -> tuple[list[s
             argv += ["--config", f"model_reasoning_effort={json.dumps(job.effort)}"]
         return [*argv, "-"], True
 
+    if job.provider == "claude":
+        # Installed Claude Code 2.1.330 --help: --restricted removes command and
+        # WebFetch tools unless --tools names them, and confines file tools to
+        # the working directory. The worker cwd is its worktree. --permission-prompts
+        # none denies anything that would still wait for a person. Reply text is
+        # accepted only by the versioned parser, not by a zero exit code.
+        editing = job.mode == "write"
+        tools = "Read,Grep,Glob,Edit,Write" if editing else "Read,Grep,Glob"
+        argv = [
+            "claude", "--restricted", "-p",
+            "--output-format", "json", "--no-session-persistence",
+            "--setting-sources", "", "--strict-mcp-config",
+            "--mcp-config", '{"mcpServers":{}}',
+            "--tools", tools,
+            "--permission-mode", "acceptEdits" if editing else "dontAsk",
+            "--permission-prompts", "none",
+        ]
+        if job.model:
+            argv += ["--model", job.model]
+        if job.effort:
+            argv += ["--effort", job.effort]
+        return argv, True
+
+    if job.provider != "grok":
+        raise DelegateError(f"unknown worker {job.provider}")
     # Grok's read-only sandbox needs bubblewrap, which cannot start on every host.
     # The Landlock workspace profile limits writes to the disposable worktree,
     # temp dirs and ~/.grok. Read tasks also lose the edit tools.
@@ -242,8 +277,34 @@ def _on_sigterm(signum: int, frame: object) -> None:
     raise Terminated
 
 
-def run_worker(argv: list[str], stdin_file: Path | None, job: Job, runtime_dir: Path, env: dict[str, str] | None) -> tuple[int | None, float]:
-    """Run one worker in its own process group. Return (exit code or None on timeout, seconds)."""
+def _wait(process: subprocess.Popen[bytes], timeout: float, stop: threading.Event | None) -> int:
+    """Wait for the worker. A set ``stop`` event ends the wait with Terminated."""
+    if stop is None:
+        return process.wait(timeout=timeout)
+    deadline = time.monotonic() + timeout
+    while True:
+        if stop.is_set():
+            raise Terminated
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        try:
+            return process.wait(timeout=min(remaining, 0.1))
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def run_worker(
+    argv: list[str], stdin_file: Path | None, job: Job, runtime_dir: Path, env: dict[str, str] | None,
+    stop: threading.Event | None = None,
+) -> tuple[int | None, float]:
+    """Run one worker in its own process group. Return (exit code or None on timeout, seconds).
+
+    Signal handlers only run on the main thread. A caller that runs workers on
+    other threads passes ``stop`` and sets it to end them.
+    """
+    if stop is not None and stop.is_set():
+        raise Terminated
     started = time.monotonic()
     # A file on stdin cannot block the controller the way a full pipe can, so the
     # timeout covers the whole run, and an early worker exit cannot raise EPIPE.
@@ -261,7 +322,7 @@ def run_worker(argv: list[str], stdin_file: Path | None, job: Job, runtime_dir: 
         except OSError as error:
             raise DelegateError(f"could not start {argv[0]}: {error.strerror}") from None
         try:
-            code: int | None = process.wait(timeout=job.timeout)
+            code: int | None = _wait(process, job.timeout, stop)
         except subprocess.TimeoutExpired:
             code = None
         finally:
@@ -292,6 +353,22 @@ def extract_reply(job: Job, reply_file: Path, runtime_dir: Path) -> str:
     if isinstance(result, dict) and isinstance(result.get("text"), str):
         return result["text"]
     return ""
+
+
+def read_claude_reply(runtime_dir: Path) -> tuple[str, CodexUsage]:
+    """Accept a Claude reply only when the versioned parser accepts it."""
+    try:
+        version_result = subprocess.run(
+            ["claude", "--version"], capture_output=True, timeout=3, check=True, text=True,
+        )
+        version = read_version("claude", version_result.stdout)
+        output = (runtime_dir / "stdout.log").read_bytes()
+        if len(output) > USAGE_LOG_LIMIT:
+            raise ProviderError("malformed_response")
+        parsed = parse_claude_json(output, version=version, returncode=0)
+    except (OSError, ValueError, subprocess.SubprocessError, ProviderError):
+        raise ProviderError("malformed_response") from None
+    return parsed.text, parsed.usage
 
 
 def worker_usage(job: Job, returncode: int | None, runtime_dir: Path) -> CodexUsage:
@@ -332,19 +409,48 @@ def select_worker(provider: str, lead: str, mode: str) -> str:
     raise DelegateError(f"no eligible {mode} worker for {LEAD_NAMES[lead]} is on PATH")
 
 
-def dispatch(args: argparse.Namespace) -> int:
+def resolve_seat(seat: str, lead: str, mode: str, *, allow_grok_write: bool = False) -> str:
+    """Resolve a conductor seat. ``self`` is the lead's own provider.
+
+    A Grok write worker is refused unless the caller opted in for this run.
+    """
+    if seat == "self":
+        if lead not in LEAD_NAMES:
+            raise DelegateError(f"unknown lead {lead}")
+        if shutil.which(lead) is None:
+            raise DelegateError(f"{lead} is not on PATH")
+        provider = lead
+    elif seat not in {*PROVIDERS, "auto"}:
+        raise DelegateError(f"unknown seat {seat}")
+    else:
+        provider = select_worker(seat, lead, mode)
+    if provider == "grok" and mode == "write" and allow_grok_write is not True:
+        raise DelegateError(GROK_WRITE_REFUSAL)
+    return provider
+
+
+def _resolve(args: argparse.Namespace) -> tuple[Path, str, dict[str, str] | None, str, float]:
     repo = repo_root(Path(args.repo or Path.cwd()))
-    if args.provider == "auto" and (args.model or args.effort):
+    if args.provider in {"auto", "self"} and (args.model or args.effort):
         raise DelegateError("--model and --effort require an explicit worker")
-    provider = select_worker(args.provider, args.lead, args.mode)
-    if args.profile is not None and args.provider == "auto":
+    if args.profile is not None and args.provider in {"auto", "self"}:
         raise DelegateError("--profile requires an explicit worker")
+    provider = resolve_seat(
+        args.provider, args.lead, args.mode,
+        allow_grok_write=getattr(args, "allow_grok_write", False),
+    )
     env = account_environment(provider, args.profile) if args.profile is not None else None
     name = check_name(args.name or default_name(provider))
     timeout = DEFAULT_TIMEOUT[args.mode] if args.timeout is None else args.timeout
     if not math.isfinite(timeout) or timeout <= 0:
         raise DelegateError("--timeout must be a finite positive number")
+    return repo, provider, env, name, timeout
+
+
+def dispatch(args: argparse.Namespace) -> int:
+    """Run one worker for the command line: own SIGTERM and print the summary."""
     if args.dry_run:
+        _, provider, _, _, timeout = _resolve(args)
         print(json.dumps({
             "status": "planned",
             "lead": args.lead,
@@ -358,6 +464,31 @@ def dispatch(args: argparse.Namespace) -> int:
             "account_selection": "named" if args.profile is not None else "default",
         }, indent=2))
         return 0
+    previous = signal.signal(signal.SIGTERM, _on_sigterm)
+    try:
+        code, summary = launch_job(args)
+    except Terminated:
+        raise DelegateError("terminated by SIGTERM; worker stopped") from None
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    print(json.dumps(summary, indent=2))
+    return code
+
+
+def launch_job(
+    args: argparse.Namespace, *,
+    stop: threading.Event | None = None,
+    setup_lock: threading.Lock | None = None,
+) -> tuple[int, dict[str, object]]:
+    """Run one worker and return its exit code and summary.
+
+    This neither prints nor touches signal handlers, so several calls can run
+    on separate threads. The caller owns SIGTERM. Terminated propagates after
+    the worker's process group is killed and a disposable worktree is removed.
+    ``setup_lock`` serializes the git steps before and after the worker. The
+    worker process itself runs outside the lock.
+    """
+    repo, provider, env, name, timeout = _resolve(args)
     task = read_task(args)
     job = Job(
         provider=provider, mode=args.mode, name=name, repo=repo,
@@ -366,42 +497,57 @@ def dispatch(args: argparse.Namespace) -> int:
         timeout=timeout,
         model=args.model, effort=args.effort, lead=args.lead,
     )
-    if job.log_dir.exists():
-        raise DelegateError(f"log directory {job.log_dir} already exists; choose another --name")
-    job.log_dir.mkdir(parents=True, mode=0o700)
-    create_worktree(job)
-    head = git(job.worktree, "rev-parse", "HEAD").strip()
+
+    def guard() -> contextlib.AbstractContextManager[object]:
+        return setup_lock if setup_lock is not None else contextlib.nullcontext()
+
+    with guard():
+        if job.log_dir.exists():
+            raise DelegateError(f"log directory {job.log_dir} already exists; choose another --name")
+        job.log_dir.mkdir(parents=True, mode=0o700)
+        create_worktree(job)
+        head = git(job.worktree, "rev-parse", "HEAD").strip()
     keep = job.mode == "write" or args.keep
     carried: list[str] = []
-    previous = signal.signal(signal.SIGTERM, _on_sigterm)
+    accepted = False
     try:
-        if args.with_changes:
-            carried = carry_changes(repo, job.worktree)
-            if job.branch and carried:
-                # Keep the lead's carried work in its own commit so the worker's
-                # edits stay a separate, cherry-pickable commit after collect.
-                git(job.worktree, "add", "--all")
-                git(job.worktree, "commit", "-q", "--no-verify", "-m",
-                    f"Carry lead's uncommitted changes into delegate {name}")
-        baseline = worktree_changes(job.worktree)["status"]
+        with guard():
+            if args.with_changes:
+                carried = carry_changes(repo, job.worktree)
+                if job.branch and carried:
+                    # Keep the lead's carried work in its own commit so the worker's
+                    # edits stay a separate, cherry-pickable commit after collect.
+                    git(job.worktree, "add", "--all")
+                    git(job.worktree, "commit", "-q", "--no-verify", "-m",
+                        f"Carry lead's uncommitted changes into delegate {name}")
+            baseline = worktree_changes(job.worktree)["status"]
         with tempfile.TemporaryDirectory(prefix="firstchair-delegate-") as scratch:
             runtime_dir = Path(scratch)
             prompt_file = runtime_dir / "prompt.md"
             prompt_file.write_text(build_prompt(job, task), encoding="utf-8")
             reply_file = runtime_dir / "reply.md"
             argv, use_stdin = build_command(job, prompt_file, reply_file)
-            code, elapsed = run_worker(argv, prompt_file if use_stdin else None, job, runtime_dir, env)
+            code, elapsed = run_worker(
+                argv, prompt_file if use_stdin else None, job, runtime_dir, env, stop,
+            )
             usage = worker_usage(job, code, runtime_dir)
-            reply = extract_reply(job, reply_file, runtime_dir) if code == 0 else ""
-        changes = worktree_changes(job.worktree)
-    except Terminated:
-        raise DelegateError("terminated by SIGTERM; worker stopped") from None
+            reply = ""
+            accepted = code == 0
+            if code == 0 and provider == "claude":
+                try:
+                    reply, usage = read_claude_reply(runtime_dir)
+                except ProviderError:
+                    accepted = False
+            elif code == 0:
+                reply = extract_reply(job, reply_file, runtime_dir)
+        with guard():
+            changes = worktree_changes(job.worktree)
     finally:
-        signal.signal(signal.SIGTERM, previous)
         if not keep:
-            remove_worktree(repo, job.worktree)
+            with guard():
+                remove_worktree(repo, job.worktree)
 
-    status = "timeout" if code is None else ("completed" if code == 0 else "failed")
+    status = "timeout" if code is None else ("completed" if accepted else "failed")
     summary = {
         "name": name,
         "provider": provider,
@@ -425,8 +571,7 @@ def dispatch(args: argparse.Namespace) -> int:
     redact_record(summary)
     metadata = {key: summary[key] for key in ("name", "provider", "lead", "mode", "status", "usage")}
     (job.log_dir / "summary.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    print(json.dumps(summary, indent=2))
-    return 0 if status == "completed" else (124 if code is None else 1)
+    return (0 if status == "completed" else (124 if code is None else 1)), summary
 
 
 def read_task(args: argparse.Namespace) -> str:
@@ -537,7 +682,7 @@ def configure_parser(root: argparse.ArgumentParser) -> None:
     commands = root.add_subparsers(dest="delegate_command", required=True)
 
     run = commands.add_parser("run", help="Dispatch one task to a worker")
-    run.add_argument("provider", choices=(*PROVIDERS, "auto"))
+    run.add_argument("provider", choices=(*PROVIDERS, "auto", "self"))
     run.add_argument("--lead", choices=LEAD_NAMES, default="claude",
                      help="Agent running the lead session (default: claude)")
     run.add_argument("task", nargs="?", help="Task text, or '-' to read stdin")
@@ -550,6 +695,10 @@ def configure_parser(root: argparse.ArgumentParser) -> None:
     run.add_argument("--effort", help="Provider reasoning effort override")
     run.add_argument("--dry-run", action="store_true", help="Show the selection without launching a worker")
     run.add_argument("--keep", action="store_true", help="Keep a read task's worktree")
+    run.add_argument(
+        "--allow-grok-write", action="store_true",
+        help="Accept a Grok write worker, which has terminal commands and network access",
+    )
     run.add_argument(
         "--with-changes", action="store_true",
         help="Copy the checkout's uncommitted and untracked files into the worktree",

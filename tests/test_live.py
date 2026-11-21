@@ -9,8 +9,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from firstchair.cli import main
-from firstchair.live import build_command, live_environment
+from firstchair.cli import _print_text, main
+from firstchair.live import LiveSession, build_command, live_environment
+from firstchair.provider import ProviderError
+from firstchair.usage import Reply, Usage
 
 
 TASK = "Plan the sorting of sample cards."
@@ -61,11 +63,15 @@ if behavior == "timeout":
     sys.exit(0)
 
 if provider == "codex":
-    synthesizing = "Reviewer's feedback:" in call["stdin"]
-    text = RESULT if synthesizing else PLAN
-    usage = {"input_tokens": 17, "output_tokens": 7} if synthesizing else {
-        "input_tokens": 11, "output_tokens": 3
-    }
+    if "Reviewer's feedback:" in call["stdin"]:
+        text = RESULT
+        usage = {"input_tokens": 17, "output_tokens": 7}
+    elif "independent reviewer" in call["stdin"]:
+        text = REVIEW
+        usage = {"input_tokens": 13, "output_tokens": 5}
+    else:
+        text = PLAN
+        usage = {"input_tokens": 11, "output_tokens": 3}
     emit({"type": "thread.started", "thread_id": "fixture-thread"})
     emit({"type": "turn.started"})
     emit({"type": "item.completed",
@@ -104,11 +110,16 @@ class LivePolicyTests(unittest.TestCase):
                 self.assertIn("--strict-mcp-config", argv)
                 self.assertEqual(argv[argv.index("--permission-mode") + 1], "dontAsk")
 
-        argv, use_stdin = build_command("grok", workspace, prompt_file)
-        self.assertFalse(use_stdin)
-        self.assertIn(("--deny", "mcp__*"), tuple(zip(argv, argv[1:])))
-        self.assertEqual(argv[argv.index("--permission-mode") + 1], "dontAsk")
-        self.assertEqual(argv[argv.index("--prompt-file") + 1], str(prompt_file))
+        for directory in (None, workspace):
+            with self.subTest(workspace=directory):
+                argv, use_stdin = build_command("grok", directory, prompt_file)
+                self.assertFalse(use_stdin)
+                denied = tuple(zip(argv, argv[1:]))
+                self.assertIn(("--deny", "mcp__*"), denied)
+                self.assertIn(("--deny", "Bash"), denied)
+                self.assertIn(("--deny", "run_terminal_command"), denied)
+                self.assertEqual(argv[argv.index("--permission-mode") + 1], "dontAsk")
+                self.assertEqual(argv[argv.index("--prompt-file") + 1], str(prompt_file))
 
     def test_live_environment_filters_credentials_and_unrelated_variables(self):
         homes = {
@@ -213,17 +224,47 @@ class LiveCLITests(unittest.TestCase):
         self.assertEqual((record["status"], record["stage"], record["error"]),
                          ("failed", "plan", "rate_limited"))
         self.assertEqual(record["stages"], {})
+        self.assertEqual(record["exhausted"], [{
+            "provider": "claude", "profile": None, "error": "rate_limited", "stage": "plan",
+        }])
         self.assertNotIn("result", record)
 
-    def test_reviewer_failure_preserves_plan(self):
+    def test_reviewer_out_of_usage_hands_the_rest_to_the_lead(self):
         with patch.dict(os.environ, {"FIRSTCHAIR_TEST_BEHAVIOR": "claude_429"}):
-            stdout, _ = self.run_live("--reviewer", "claude", expected=1)
+            stdout, _ = self.run_live("--reviewer", "claude")
         record = self.saved_record(stdout)
-        self.assertEqual((record["status"], record["stage"], record["error"]),
-                         ("failed", "review", "rate_limited"))
-        self.assertEqual(set(record["stages"]), {"plan"})
-        self.assertEqual(record["stages"]["plan"]["text"], PLAN)
-        self.assertNotIn("result", record)
+        self.assertEqual(record["status"], "completed")
+        self.assertEqual(record["result"], RESULT)
+        self.assertEqual(
+            {stage: (data["provider"], data["text"]) for stage, data in record["stages"].items()},
+            {"plan": ("codex", PLAN), "review": ("codex", REVIEW), "synthesize": ("codex", RESULT)},
+        )
+        self.assertEqual(record["exhausted"], [{
+            "provider": "claude", "profile": None, "error": "rate_limited", "stage": "review",
+        }])
+        self.assertEqual(record["usage"]["provenance"], "partial")
+        model_calls = [call for call in self.calls() if "--version" not in call["args"]]
+        self.assertEqual(
+            [call["provider"] for call in model_calls],
+            ["codex", "claude", "codex", "codex"],
+        )
+
+    def test_resume_after_usage_failure_uses_the_added_provider(self):
+        with patch.dict(os.environ, {"FIRSTCHAIR_TEST_BEHAVIOR": "claude_429"}):
+            stdout, _ = self.run_live(provider="claude", expected=1)
+        failed = self.saved_record(stdout)
+        before = len(self.calls())
+        stdout, _ = self.cli("resume", failed["run_id"], "--provider", "codex")
+        record = self.saved_record(stdout)
+        self.assertEqual(record["status"], "completed")
+        self.assertEqual(record["result"], RESULT)
+        self.assertEqual(
+            [data["provider"] for data in record["stages"].values()],
+            ["codex", "codex", "codex"],
+        )
+        self.assertEqual(record["stage_outputs"]["plan"], PLAN)
+        new_calls = [call for call in self.calls()[before:] if "--version" not in call["args"]]
+        self.assertEqual([call["provider"] for call in new_calls], ["codex", "codex", "codex"])
 
     def test_timeout_kills_grandchild(self):
         with patch.dict(os.environ, {"FIRSTCHAIR_TEST_BEHAVIOR": "timeout"}):
@@ -281,3 +322,105 @@ class LiveCLITests(unittest.TestCase):
                 self.assertEqual(providers[name]["discovery"], "installed")
                 self.assertIs(providers[name]["enabled"], False)
         self.assertEqual(self.calls(), [])
+
+
+class _Seat:
+    def __init__(self, provider, profile=None, replies=()):
+        self.provider = provider
+        self.profile = profile
+        self.version = "fixture"
+        self.replies = list(replies)
+        self.prompts = []
+
+    def ask(self, prompt):
+        self.prompts.append(prompt)
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return Reply(reply, Usage("measured", 1, 1))
+
+
+class LiveFailoverTests(unittest.TestCase):
+    def test_second_account_finishes_when_the_first_is_out_of_usage(self):
+        empty = _Seat("claude", "work", [ProviderError("rate_limited")])
+        reserve = _Seat("claude", "personal", ["plan", "review", "result"])
+        session = LiveSession(empty, reserve)
+        self.assertEqual(session.plan("task"), "plan")
+        self.assertEqual(session.review("plan"), "review")
+        self.assertEqual(session.synthesize("review"), "result")
+        self.assertEqual(len(empty.prompts), 1)
+        self.assertEqual(len(reserve.prompts), 3)
+        self.assertEqual(session.exhausted, [{
+            "provider": "claude", "profile": "work", "error": "rate_limited", "stage": "plan",
+        }])
+
+    def test_timeout_and_unavailable_also_fall_through(self):
+        for code in ("provider_timeout", "provider_unavailable"):
+            with self.subTest(code=code):
+                first = _Seat("codex", replies=[ProviderError(code)])
+                second = _Seat("grok", replies=["kept going"])
+                session = LiveSession(first, second)
+                self.assertEqual(session.plan("task"), "kept going")
+                self.assertEqual(session.stages["plan"]["provider"], "grok")
+
+    def test_authorization_failure_does_not_switch_providers(self):
+        lead = _Seat("codex", replies=["plan"])
+        reviewer = _Seat("claude", replies=[ProviderError("authorization_failed")])
+        session = LiveSession(lead, reviewer)
+        session.plan("task")
+        with self.assertRaisesRegex(ProviderError, "^authorization_failed$"):
+            session.review("plan")
+        self.assertEqual(len(lead.prompts), 1)
+        self.assertEqual(len(reviewer.prompts), 1)
+        self.assertEqual(session.exhausted, [])
+
+    def test_one_remaining_provider_does_every_later_stage(self):
+        claude = _Seat("claude", replies=[ProviderError("rate_limited")])
+        codex = _Seat("codex", replies=["plan", "review", "result"])
+        grok = _Seat("grok", replies=[ProviderError("rate_limited")])
+        session = LiveSession(claude, grok, (codex,))
+        self.assertEqual(session.synthesize(session.review(session.plan("task"))), "result")
+        self.assertEqual(len(claude.prompts), 1)
+        self.assertEqual(len(grok.prompts), 1)
+        self.assertEqual(len(codex.prompts), 3)
+
+    def test_restore_does_not_retry_a_seat_missing_from_a_bad_exhausted_entry(self):
+        session = LiveSession(_Seat("codex"), _Seat("claude"))
+        with self.assertRaisesRegex(ValueError, "exhausted"):
+            session.restore({"task": "task", "exhausted": [{}]})
+        with self.assertRaisesRegex(ValueError, "attempt"):
+            session.restore({"task": "task", "attempted": -1})
+        with self.assertRaisesRegex(ValueError, "stage"):
+            session.restore({"task": "task", "stages": {"plan": {"text": "plan"}}})
+
+    def test_restore_skips_a_named_exhausted_seat_and_keeps_plan_text(self):
+        spent = _Seat("codex", replies=["unused"])
+        reserve = _Seat("claude", replies=["result", "plan"])
+        session = LiveSession(spent, reserve)
+        session.restore({
+            "task": "keep going",
+            "stage_outputs": {"plan": "saved plan"},
+            "exhausted": [{"provider": "codex", "profile": None, "error": "rate_limited"}],
+        })
+        self.assertEqual(session.attempted, 0)
+        self.assertEqual(session.plan_text, "saved plan")
+        session.synthesize("review")
+        self.assertIn("saved plan", reserve.prompts[0])
+        self.assertEqual(session.plan("keep going"), "plan")
+        self.assertEqual(spent.prompts, [])
+
+    def test_text_summary_skips_an_exhausted_entry_without_an_error(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+            _print_text({
+                "status": "failed",
+                "error": "rate_limited",
+                "run_id": "00000000-0000-4000-8000-000000000001",
+                "exhausted": [
+                    {"provider": "codex"},
+                    {"provider": "claude", "error": "rate_limited"},
+                ],
+            })
+        text = stdout.getvalue()
+        self.assertIn("Skipped: claude (rate_limited)", text)
+        self.assertNotIn("codex", text)

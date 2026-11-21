@@ -6,17 +6,22 @@ import sys
 from time import monotonic
 from functools import partial
 from pathlib import Path
+from typing import cast
 
 from . import __version__, accounts
 from .config import read_synthetic_config
+from .conductor import configure_parser as configure_conduct_parser
+from .conductor import execute as execute_conduct
 from .delegation import configure_parser as configure_delegate_parser
 from .delegation import execute as execute_delegation
 from .inventory import provider_inventory, routing_explanation
 from .live import PROVIDERS as LIVE_PROVIDERS
 from .live import LiveLimits, LiveProvider, LiveSession, describe, readiness
+from .parallel import run_bounded
 from .provider import ExecutionLimits, ProviderError, SyntheticProvider
 from .state_listing import list_runs
 from .workflow import (
+    continue_workflow,
     demo_plan,
     demo_review,
     demo_synthesize,
@@ -62,6 +67,10 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
         help="Lead provider. Live providers run read-only with your existing sign-in",
     )
     run.add_argument("--reviewer", choices=LIVE_PROVIDERS, help="Live reviewer provider (default: the lead)")
+    run.add_argument(
+        "--fallback", action="append", choices=LIVE_PROVIDERS, default=None,
+        help="Extra provider used when an earlier one is out of usage",
+    )
     run.add_argument("--workspace", type=Path, help="Directory live providers may read (default: an empty temp dir)")
     run.add_argument("--profile", help="Named account profile for the lead (see firstchair auth)")
     run.add_argument("--reviewer-profile", help="Named account profile for the reviewer")
@@ -78,8 +87,23 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
     commands.add_parser("runs", help="List saved run summaries")
     recover = commands.add_parser("recover", help="Mark an abandoned run interrupted")
     recover.add_argument("run_id")
+    resume = commands.add_parser("resume", help="Continue a stopped run from the last finished stage")
+    resume.add_argument("run_id")
+    resume.add_argument("--provider", choices=LIVE_PROVIDERS, help="Provider to add when the saved ones are exhausted")
+    resume.add_argument("--reviewer", choices=LIVE_PROVIDERS)
+    resume.add_argument("--fallback", action="append", choices=LIVE_PROVIDERS, default=None)
+    resume.add_argument("--workspace", type=Path)
+    resume.add_argument("--profile")
+    resume.add_argument("--reviewer-profile")
+    resume.add_argument("--timeout", type=float, default=None)
+    resume.add_argument("--max-output-bytes", type=int, default=None)
+    resume.add_argument("--max-input-bytes", type=int)
+    resume.add_argument("--total-timeout", type=float)
+    resume.add_argument("--format", choices=("json", "text"), default="json")
     delegate = commands.add_parser("delegate", help="Dispatch workers in isolated Git worktrees")
     configure_delegate_parser(delegate)
+    conduct = commands.add_parser("conduct", help="Run a score of workers from the primary seat")
+    configure_conduct_parser(conduct)
     auth = commands.add_parser("auth", help="Manage named provider logins")
     accounts.configure_parser(auth)
     args = parser.parse_args(argv)
@@ -87,6 +111,8 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
         return accounts.execute(args)
     if args.command == "delegate":
         return execute_delegation(args)
+    if args.command == "conduct":
+        return execute_conduct(args)
     if args.state_dir is None:
         args.state_dir = default_state_dir()
 
@@ -94,15 +120,23 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
         if args.command == "doctor":
             providers = provider_inventory()
             if not args.offline:
-                for name in LIVE_PROVIDERS:
+                def probe(name: str, current: str | bool | None) -> dict[str, str | bool | None]:
                     report = readiness(name)
                     contract = report["contract"]
                     supported = contract in ("verified", "compatible")
-                    providers[name].update(
-                        version=report["version"], contract=contract,
-                        readiness="ready" if supported else providers[name]["readiness"],
-                        enabled=supported,
-                    )
+                    return {
+                        "version": cast(str | None, report["version"]),
+                        "contract": cast(str | None, contract),
+                        "readiness": "ready" if supported else current,
+                        "enabled": supported,
+                    }
+
+                probed = run_bounded(
+                    [partial(probe, name, providers[name]["readiness"]) for name in LIVE_PROVIDERS],
+                    limit=3,
+                )
+                for name, fields in zip(LIVE_PROVIDERS, probed, strict=True):
+                    providers[name].update(fields)
             result = {"providers": providers}
         elif args.command == "run":
             if args.task == "-":
@@ -110,9 +144,13 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
             if not args.task.strip():
                 raise ValueError("task must contain text")
             live = args.provider in LIVE_PROVIDERS
-            live_only = (args.reviewer, args.workspace, args.profile, args.reviewer_profile)
+            live_only = (
+                args.reviewer, args.workspace, args.profile, args.reviewer_profile, args.fallback,
+            )
             if not live and any(value is not None for value in live_only):
-                raise ValueError("--reviewer, --workspace and --profile require a live --provider")
+                raise ValueError(
+                    "--reviewer, --workspace, --profile and --fallback require a live --provider"
+                )
             overrides = {
                 "timeout": args.timeout,
                 "max_output_bytes": args.max_output_bytes,
@@ -144,7 +182,13 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
                         args.reviewer_profile or (args.profile if reviewer_name == args.provider else None),
                         deadline,
                     )
-                session = LiveSession(lead, reviewer)
+                extras = tuple(
+                    LiveProvider(name, limits, args.workspace, None, deadline)
+                    for name in (args.fallback or [])
+                )
+                session = LiveSession(lead, reviewer, extras)
+                if len(session.seats()) > 3:
+                    raise ValueError("at most 3 providers can share a run")
                 stages = (session.plan, session.review, session.synthesize)
                 details = session.details
             elif args.provider:
@@ -169,6 +213,7 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
                     "selection": "explicit",
                     "roles": describe({"lead": lead, "reviewer": reviewer}),
                     "stages": {"plan": "lead", "review": "reviewer", "synthesize": "lead"},
+                    "failover": [seat.provider for seat in session.seats()],
                     "limits": {
                         "stage_timeout": limits.timeout,
                         "stage_output_bytes": limits.output_bytes,
@@ -197,14 +242,21 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
             else:
                 if live:
                     # Reject an unsupported CLI before a run record is created.
-                    for provider in {id(lead): lead, id(reviewer): reviewer}.values():
+                    session.task = args.task
+                    for provider in session.seats():
                         try:
                             provider.prepare()
                         except ProviderError as error:
                             raise ValueError(
                                 f"{provider.provider} is not ready: {error}. Run firstchair doctor"
                             ) from None
-                result = run_workflow(args.task, args.state_dir, *stages, details=details)
+                result = run_workflow(
+                    args.task, args.state_dir, *stages, details=details,
+                    provider=args.provider or "demo",
+                    prelude=session.details() if live else None,
+                )
+        elif args.command == "resume":
+            result = _resume(args)
         elif args.command == "recover":
             result = recover_workflow(args.state_dir, args.run_id)
         elif args.command == "runs":
@@ -218,7 +270,7 @@ def main(argv: list[str] | None = None, prog: str = "firstchair") -> int:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
         return 1
 
-    if args.command == "run" and args.format == "text" and "run_id" in result:
+    if args.command in {"run", "resume"} and args.format == "text" and "run_id" in result:
         _print_text(result)
     else:
         print(json.dumps(result, indent=2))
@@ -239,7 +291,140 @@ def _print_text(record: dict[str, object]) -> None:
         print(f"## Result\n\n{str(record.get('result', '')).strip()}\n")
     else:
         print(f"## {record.get('status')}: {record.get('error', 'unknown')}\n")
+    exhausted = record.get("exhausted")
+    if isinstance(exhausted, list) and exhausted:
+        skipped = ", ".join(
+            f"{item['provider']} ({item['error']})"
+            for item in exhausted
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("provider"), str)
+                and isinstance(item.get("error"), str)
+            )
+        )
+        if skipped:
+            print(f"Skipped: {skipped}\n")
     usage = record.get("usage")
     if isinstance(usage, dict) and usage.get("provenance") != "unknown":
         print(f"Tokens ({usage['provenance']}): {usage['input_tokens']} in, {usage['output_tokens']} out")
     print(f"Run {record['run_id']} · firstchair status {record['run_id']}", file=sys.stderr)
+
+
+def _resume(args: argparse.Namespace) -> dict[str, object]:
+    path = record_path(args.state_dir, args.run_id)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(record, dict):
+        raise ValueError("invalid run record")
+    provider_name = record.get("provider")
+    live_request = any(
+        value is not None
+        for value in (
+            args.provider, args.reviewer, args.workspace, args.profile,
+            args.reviewer_profile, args.fallback,
+        )
+    )
+    if provider_name == "demo":
+        if live_request:
+            raise ValueError("a demo run cannot add a live provider")
+        return continue_workflow(
+            args.state_dir, args.run_id, demo_plan, demo_review, demo_synthesize,
+        )
+    if provider_name == "synthetic":
+        if live_request:
+            raise ValueError("a synthetic run cannot add a live provider")
+        overrides = {
+            key: value for key, value in {
+                "timeout": args.timeout,
+                "max_output_bytes": args.max_output_bytes,
+                "max_input_bytes": args.max_input_bytes,
+                "total_timeout": args.total_timeout,
+            }.items() if value is not None
+        }
+        defaults = ExecutionLimits()
+        limits = ExecutionLimits(
+            timeout=overrides.get("timeout", defaults.timeout),
+            output_bytes=overrides.get("max_output_bytes", defaults.output_bytes),
+            input_bytes=overrides.get("max_input_bytes", defaults.input_bytes),
+        )
+        synthetic = SyntheticProvider(limits, total_timeout=overrides.get("total_timeout"))
+        stages = tuple(partial(synthetic.run, stage) for stage in STAGES)
+        return continue_workflow(args.state_dir, args.run_id, *stages)
+    if provider_name not in LIVE_PROVIDERS:
+        raise ValueError("run has no saved provider")
+    session = _resume_session(args, record)
+    spent = {(item.get("provider"), item.get("profile")) for item in session.exhausted}
+    for seat in session.seats():
+        if (seat.provider, seat.profile) in spent:
+            continue
+        try:
+            seat.prepare()
+        except ProviderError as error:
+            raise ValueError(
+                f"{seat.provider} is not ready: {error}. Run firstchair doctor"
+            ) from None
+    return continue_workflow(
+        args.state_dir, args.run_id,
+        session.plan, session.review, session.synthesize, details=session.details,
+    )
+
+
+def _resume_session(args: argparse.Namespace, record: dict[str, object]) -> LiveSession:
+    overrides = {
+        key: value for key, value in {
+            "timeout": args.timeout,
+            "max_output_bytes": args.max_output_bytes,
+            "max_input_bytes": args.max_input_bytes,
+            "total_timeout": args.total_timeout,
+        }.items() if value is not None
+    }
+    defaults = LiveLimits()
+    limits = LiveLimits(
+        timeout=overrides.get("timeout", defaults.timeout),
+        output_bytes=overrides.get("max_output_bytes", defaults.output_bytes),
+        input_bytes=overrides.get("max_input_bytes", defaults.input_bytes),
+    )
+    total = overrides.get("total_timeout")
+    if total is not None and not 0 < total <= 4 * 3600:
+        raise ValueError("total timeout must be greater than 0 and at most 14400 seconds")
+    deadline = None if total is None else monotonic() + total
+    workspace = args.workspace
+    if workspace is None:
+        saved = record.get("workspace")
+        if isinstance(saved, str) and Path(saved).is_dir():
+            workspace = Path(saved)
+    specs: list[tuple[str, str | None]] = []
+    roster = record.get("roster")
+    if isinstance(roster, list):
+        for item in roster:
+            if not isinstance(item, dict):
+                raise ValueError("invalid provider roster")
+            name = item.get("provider")
+            profile = item.get("profile")
+            if not isinstance(name, str) or name not in LIVE_PROVIDERS:
+                raise ValueError("invalid provider roster")
+            if profile is not None and not isinstance(profile, str):
+                raise ValueError("invalid provider roster")
+            specs.append((name, profile))
+    if args.provider is not None:
+        specs.append((args.provider, args.profile))
+    if args.reviewer is not None:
+        specs.append((args.reviewer, args.reviewer_profile))
+    for name in args.fallback or []:
+        specs.append((name, None))
+    unique: list[tuple[str, str | None]] = []
+    seen: set[tuple[str, str | None]] = set()
+    for spec in specs:
+        if spec not in seen:
+            seen.add(spec)
+            unique.append(spec)
+    if not unique:
+        raise ValueError("resume needs --provider when the run has no roster")
+    if len(unique) > 3:
+        raise ValueError("at most 3 providers can share a run")
+    seats = [
+        LiveProvider(name, limits, workspace, profile, deadline) for name, profile in unique
+    ]
+    reviewer = seats[1] if len(seats) > 1 else seats[0]
+    session = LiveSession(seats[0], reviewer, tuple(seats[2:]))
+    session.restore(record)
+    return session
