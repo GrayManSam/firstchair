@@ -151,9 +151,11 @@ class CswapBridgeTests(unittest.TestCase):
 
     def test_missing_cswap_is_unavailable(self):
         (self.fixture / "cswap").unlink()
-        self.assertEqual(cswap.list_profiles(), [])
-        with self.assertRaises(ProviderError):
-            cswap.require_cswap()
+        # Search only the fixture, so a cswap installed on this machine is not found.
+        with patch.dict(os.environ, {"PATH": str(self.fixture)}):
+            self.assertEqual(cswap.list_profiles(), [])
+            with self.assertRaises(ProviderError):
+                cswap.require_cswap()
 
     # -- listing and usage -----------------------------------------------------
 
