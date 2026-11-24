@@ -1,0 +1,3 @@
+# Early commits used a placeholder email. Map them to the maintainer's
+# GitHub identity for git log, shortlog and blame.
+GrayManSam <242299803+GrayManSam@users.noreply.github.com> <your@email.com>
