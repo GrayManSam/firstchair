@@ -89,6 +89,8 @@ class DelegateTests(unittest.TestCase):
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "FIRSTCHAIR_WORKTREE_ROOT": str(self.temp / "worktrees"),
             "FIRSTCHAIR_SESSION": "fixture-session",
+            # Every finished worker is counted, so the ledger must not be the user's own.
+            "XDG_STATE_HOME": str(self.temp / "state"),
             "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
             "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
         }
@@ -677,6 +679,74 @@ class DelegateTests(unittest.TestCase):
         self.assertTrue(summary["confined"])
         self.assertIn("added.txt", summary["changes"]["status"])
         self.assertEqual(list(json.loads(dump.read_text())["sees"].values()), [False, False, True])
+
+    def test_prepare_runs_before_the_worker_and_a_failed_one_starts_no_worker(self):
+        dump = self.temp / "dump.json"
+        with mock.patch.dict(os.environ, {"FAKE_WORKER_DUMP": str(dump)}):
+            code, out, error = self._main(
+                "run", "codex", "x", "--mode", "write", "--name", "ready",
+                "--prepare", "mkdir -p .git-ignored && echo installed > setup.txt",
+            )
+        self.assertEqual(code, 0, error)
+        summary = json.loads(out)
+        self.assertEqual(summary["prepare"]["exit_code"], 0)
+        self.assertEqual((Path(summary["worktree"]) / "setup.txt").read_text(), "installed\n")
+        self.assertIn("echo installed > setup.txt", json.loads(dump.read_text())["prompt"])
+        dump.unlink()
+        with mock.patch.dict(os.environ, {"FAKE_WORKER_DUMP": str(dump)}):
+            code, out, _ = self._main(
+                "run", "codex", "x", "--name", "broken", "--prepare", "echo no network >&2; exit 3",
+            )
+        summary = json.loads(out)
+        self.assertEqual((code, summary["status"], summary["prepare"]["exit_code"]), (1, "failed", 3))
+        self.assertEqual(summary["stderr_tail"], "no network")
+        self.assertFalse(dump.exists())
+        code, _, error = self._main("run", "codex", "x", "--prepare", "one\ntwo", "--name", "refused")
+        self.assertEqual(code, 2)
+        self.assertIn("--prepare", error)
+
+    def test_keep_logs_saves_private_worker_output_until_finish(self):
+        with mock.patch.dict(os.environ, {"FAKE_WORKER_STDERR": "worker note"}):
+            code, out, error = self._main("run", "codex", "x", "--name", "logged", "--keep-logs")
+        self.assertEqual(code, 0, error)
+        logs = Path(json.loads(out)["logs"])
+        self.assertIn("turn.completed", (logs / "worker.stdout.log").read_text())
+        self.assertEqual((logs / "worker.stderr.log").read_text(), "worker note")
+        self.assertEqual((logs / "worker.stdout.log").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self._main("run", "codex", "x", "--name", "quiet")[0], 0)
+        self.assertEqual(
+            sorted(path.name for path in (self.repo / ".firstchair" / "delegations" / "quiet").iterdir()),
+            ["session", "summary.json"],
+        )
+        self.assertEqual(self._main("finish", "logged")[0], 0)
+        self.assertFalse(logs.exists())
+
+    def test_a_run_without_rotation_still_counts_against_its_account(self):
+        self.assertEqual(self._main("run", "codex", "Review", "--name", "counted")[0], 0)
+        with mock.patch.dict(os.environ, {"FAKE_WORKER_EXIT": "1"}):
+            self.assertEqual(self._main("run", "codex", "Review", "--name", "failed")[0], 1)
+        ledger = json.loads((self.temp / "state" / "firstchair" / "account-ledger.json").read_text())
+        events = ledger["accounts"]["codex"]["events"]
+        self.assertEqual([event[1] for event in events], [50])
+        self.assertNotIn("Review", json.dumps(ledger))
+
+    def test_finish_needs_no_force_once_the_edits_were_applied(self):
+        self.assertEqual(self._main("run", "codex", "x", "--mode", "write", "--name", "taken")[0], 0)
+        code, _, error = self._main("finish", "taken", "--delete-branch")
+        self.assertEqual(code, 2)
+        self.assertIn("apply it", error)
+        target = self.temp / "feature-tree"
+        self._git("worktree", "add", "-q", "-b", "feature", str(target))
+        self.assertEqual(self._main("apply", "taken", "--to", str(target))[0], 0)
+        # An edit made after the apply is work nobody has taken.
+        worktree = self.temp / "worktrees" / "repo" / "taken"
+        (worktree / "later.txt").write_text("not applied\n")
+        self.assertEqual(self._main("finish", "taken", "--delete-branch")[0], 2)
+        (worktree / "later.txt").unlink()
+        code, out, error = self._main("finish", "taken", "--delete-branch")
+        self.assertEqual(code, 0, error)
+        self.assertEqual(json.loads(out), {"name": "taken", "removed": True, "branch_deleted": True})
+        self.assertEqual(self._git("branch", "--list", "delegate/taken"), "")
 
 
 if __name__ == "__main__":

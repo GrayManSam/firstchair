@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- A score can set `base`, `confine`, `hide`, `model`, `effort`, `prepare`
+  and `keep_logs` on a part, or for every part under a top-level
+  `"defaults"`. A part's value wins. `model` and `effort` need a named
+  seat, and `base` does not combine with `--with-changes`. The board does
+  not store hidden paths.
+- `delegate run --prepare COMMAND` runs one shell command in the worktree
+  before the worker starts, outside the worker's sandbox and with the
+  worker's secret-free environment, so the lead can install what the tests
+  need. The worker is told the command ran. When it fails or times out, no
+  worker starts and the summary carries its exit code under `prepare`.
+- `delegate run --keep-logs` saves the last 8 MiB of the worker's stdout
+  and stderr in the job's log folder, readable only by the owner, until
+  `delegate finish`. The files can hold the task and the reply.
+- A completed delegate worker now counts against its account without
+  `--rotate-accounts`, so `firstchair auth usage` shows the work and a
+  later rotated run takes it into account.
+- `delegate finish` no longer needs `--force` when the job's edits are
+  exactly the ones `delegate apply` last took. An edit made after the apply
+  is still refused.
+
 ## 0.1.0a3
 
 - Opt-in claude-swap bridge (`FIRSTCHAIR_CSWAP=1`): each cswap slot is a
