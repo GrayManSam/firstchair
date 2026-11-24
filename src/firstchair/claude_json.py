@@ -1,6 +1,11 @@
 """Parse the Claude Code headless text result envelope."""
 
+import json
+import time
+from dataclasses import replace
+
 from .provider import ProviderError
+from .quota import parse_claude_stream
 from .strict_json import load_json
 from .usage import Reply, parse_usage
 from .versions import check_version
@@ -47,3 +52,27 @@ def parse_claude_json(output: bytes, *, version: str, returncode: int) -> Reply:
     if not isinstance(text, str) or not text.strip():
         raise ProviderError("malformed_response")
     return Reply(text, parse_usage(result))
+
+
+def parse_claude_stream_reply(output: bytes, *, version: str, returncode: int) -> Reply:
+    """Extract a reply from one ``stream-json`` run.
+
+    The last ``result`` line is the same envelope JSON mode prints, and it is
+    held to the same rules. A ``rate_limit_event`` in the stream adds the
+    account's real usage. Output with no result line is judged as a whole,
+    so a single JSON-mode envelope is still accepted.
+    """
+    envelope = output
+    for line in reversed(output.splitlines()):
+        try:
+            message = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(message, dict) and message.get("type") == "result":
+            envelope = line
+            break
+    reply = parse_claude_json(envelope, version=version, returncode=returncode)
+    try:
+        return replace(reply, quota=parse_claude_stream(output, time.time()))
+    except ValueError:
+        return reply

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .provider import ProviderError
+from .quota import Quota
 
 MAX_TOKEN_COUNT = (1 << 63) - 1
 TOKEN_FIELDS = ("input_tokens", "output_tokens")
@@ -27,6 +28,8 @@ class Usage:
 class Reply:
     text: str
     usage: Usage
+    # The account's real usage, when the provider reported it with this reply.
+    quota: Quota | None = None
 
 
 def parse_usage(event: dict[str, object], *, extra_fields: tuple[str, ...] = ()) -> Usage:

@@ -18,8 +18,11 @@ from time import monotonic
 from typing import BinaryIO
 from typing import Any
 
+from . import cswap
 from .accounts import CREDENTIAL_OVERRIDES, HOME_VARIABLE, account_environment, profile_home
-from .claude_json import parse_claude_json
+from .fallback import is_transient
+from .rotation import Rotation, account_key
+from .claude_json import parse_claude_stream_reply
 from .codex_jsonl import parse_codex_jsonl
 from .grok_jsonl import parse_grok_jsonl
 from .provider import ProviderError, _subprocess_environment, run_bounded
@@ -38,7 +41,7 @@ _LIVE_ENV_NAMES = frozenset({
 })
 _PARSERS: dict[str, Callable[..., Reply]] = {
     "codex": parse_codex_jsonl,
-    "claude": parse_claude_json,
+    "claude": parse_claude_stream_reply,
     "grok": parse_grok_jsonl,
 }
 
@@ -131,7 +134,9 @@ def build_command(provider: str, workspace: Path | None, prompt_file: Path) -> t
     if provider == "claude":
         tools = "Read,Grep,Glob" if workspace is not None else ""
         argv = (
-            "claude", "-p", "--output-format", "json", "--no-session-persistence",
+            # stream-json carries the same result envelope as json, plus the
+            # rate_limit_event that reports the account's real usage.
+            "claude", "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
             "--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
             "--tools", tools, "--permission-mode", "dontAsk",
         )
@@ -146,7 +151,7 @@ def build_command(provider: str, workspace: Path | None, prompt_file: Path) -> t
             "--output-format", "streaming-json", "--no-subagents", "--disable-web-search",
             "--sandbox", "workspace", "--permission-mode", "dontAsk",
             "--tools", tools, "--deny", "mcp__*", "--deny", "Edit", "--deny", "Write",
-            "--deny", "Bash", "--deny", "WebFetch",
+            "--deny", "Bash", "--deny", "run_terminal_command", "--deny", "WebFetch",
         )
         return argv, False
     raise ValueError(f"unknown live provider {provider}")
@@ -163,11 +168,12 @@ class LiveProvider:
     deadline: float | None = None
     version: str | None = None
     executable: str | None = None
+    cswap_executable: str | None = None  # set by prepare() for a cswap-N profile
 
     def __post_init__(self) -> None:
         if self.provider not in PROVIDERS:
             raise ValueError(f"unknown live provider {self.provider}")
-        if self.profile is not None:
+        if self.profile is not None and not cswap.is_cswap_profile(self.provider, self.profile):
             profile_home(self.provider, self.profile)  # Reject unknown or unsafe profiles early.
         if self.workspace is not None:
             self.workspace = self.workspace.resolve()
@@ -181,6 +187,9 @@ class LiveProvider:
             executable = find_executable(self.provider, env)
             version = provider_version(self.provider, env, executable)
             check_version(self.provider, version)
+            if cswap.is_cswap_profile(self.provider, self.profile):
+                # Gate cswap as strictly as the provider: refuse before any stage.
+                self.cswap_executable = cswap.require_cswap(env)
             self.executable, self.version = executable, version
         return self.version
 
@@ -204,6 +213,9 @@ class LiveProvider:
                 prompt_file.write_bytes(payload)
                 argv, use_stdin = build_command(self.provider, self.workspace, prompt_file)
                 argv = (self.executable or find_executable(self.provider, env), *argv[1:])
+                if cswap.is_cswap_profile(self.provider, self.profile):
+                    # Same claude arguments, launched on the cswap slot.
+                    argv = tuple(cswap.wrap_command(argv, self.profile, self.cswap_executable))
                 cwd = str(self.workspace) if self.workspace is not None else scratch
                 with TemporaryFile() as request:
                     if use_stdin:
@@ -267,17 +279,137 @@ Reviewer's feedback:
 
 @dataclass
 class LiveSession:
-    """Lead plans and synthesizes; the reviewer critiques the plan."""
+    """Lead plans and synthesizes; the reviewer critiques the plan.
+
+    A seat that is out of usage, unavailable, or timed out is skipped. The
+    next named seat finishes that stage and the ones that follow. One
+    remaining seat can do the whole run. A seat is one provider under one
+    sign-in, so a second account of the same provider that the user named
+    is a separate seat and can take over.
+    """
 
     lead: LiveProvider
     reviewer: LiveProvider
+    extras: tuple[LiveProvider, ...] = ()
     task: str = ""
     plan_text: str = ""
     stages: dict[str, dict[str, object]] = field(default_factory=dict)
     attempted: int = 0
+    exhausted: list[dict[str, object]] = field(default_factory=list)
+    rotation: Rotation | None = None
+    selections: list[dict[str, object]] = field(default_factory=list)
+
+    def seats(self) -> list[LiveProvider]:
+        chosen: list[LiveProvider] = []
+        seen: set[tuple[str, str | None]] = set()
+        for seat in (self.lead, self.reviewer, *self.extras):
+            key = (seat.provider, seat.profile)
+            if key not in seen:
+                seen.add(key)
+                chosen.append(seat)
+        return chosen
+
+    def restore(self, record: dict[str, object]) -> None:
+        """Reload finished stages so a stopped run does not repeat them."""
+        task = record.get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError("run has no saved task")
+        self.task = task
+        self.stages = _saved_stages(record.get("stages"))
+        plan = self.stages.get("plan")
+        if isinstance(plan, dict) and isinstance(plan.get("text"), str):
+            self.plan_text = plan["text"]
+        else:
+            outputs = record.get("stage_outputs")
+            saved = outputs.get("plan") if isinstance(outputs, dict) else None
+            if isinstance(saved, str):
+                self.plan_text = saved
+            elif plan is not None:
+                raise ValueError("invalid plan stage")
+        self.exhausted = _saved_exhausted(record.get("exhausted", []))
+        saved = record.get("selection", [])
+        if not isinstance(saved, list) or not all(isinstance(item, dict) for item in saved):
+            raise ValueError("invalid selection record")
+        self.selections = list(saved)
+        if "attempted" not in record:
+            self.attempted = 0
+        else:
+            attempted = record["attempted"]
+            if type(attempted) is not int or attempted < 0:
+                raise ValueError("invalid attempt count")
+            self.attempted = attempted
+
+    def spent(self) -> set[tuple[object, object]]:
+        """Seats retired for this run, as (provider, profile)."""
+        return {(item.get("provider"), item.get("profile")) for item in self.exhausted}
+
+    def roster(self) -> list[dict[str, object]]:
+        """Each seat with the roles it holds, so a resume keeps the same roles."""
+        entries = []
+        for seat in self.seats():
+            key = (seat.provider, seat.profile)
+            roles = [
+                role for role, holder in (("lead", self.lead), ("reviewer", self.reviewer))
+                if (holder.provider, holder.profile) == key
+            ]
+            entries.append({"provider": seat.provider, "profile": seat.profile, "roles": roles})
+        return entries
+
+    def _available(self, preferred: LiveProvider) -> list[LiveProvider]:
+        spent = self.spent()
+        available = [seat for seat in self.seats() if (seat.provider, seat.profile) not in spent]
+        key = (preferred.provider, preferred.profile)
+        return [seat for seat in available if (seat.provider, seat.profile) == key] + [
+            seat for seat in available if (seat.provider, seat.profile) != key
+        ]
+
+    def _ask(self, stage: str, prompt: str, preferred: LiveProvider) -> str:
+        seats = self._available(preferred)
+        candidates: list[dict[str, object]] | None = None
+        if self.rotation is not None and seats:
+            seats, candidates = self.rotation.choose(seats, preferred)
+        if not seats:
+            code = self.exhausted[-1].get("error") if self.exhausted else (
+                "rate_limited" if candidates else "provider_unavailable"
+            )
+            raise ProviderError(str(code))
+        if candidates is not None:
+            # Why this account: every candidate's standing when the stage began.
+            self.selections.append({
+                "stage": stage,
+                "account": account_key(seats[0].provider, seats[0].profile),
+                "candidates": candidates,
+            })
+        error: ProviderError | None = None
+        for seat in seats:
+            self.attempted += 1
+            try:
+                reply = seat.ask(prompt)
+            except ProviderError as caught:
+                if self.rotation is not None:
+                    self.rotation.observe(seat, None, str(caught))
+                if not is_transient(str(caught)):
+                    raise
+                self.exhausted.append({
+                    "provider": seat.provider,
+                    "profile": seat.profile,
+                    "error": str(caught),
+                    "stage": stage,
+                })
+                error = caught
+                continue
+            if self.rotation is not None:
+                self.rotation.observe(seat, reply.usage, None, reply.quota)
+                if candidates is not None:
+                    self.selections[-1]["account"] = account_key(seat.provider, seat.profile)
+            return self._record(stage, seat, reply)
+        if error is None:
+            raise ProviderError("provider_unavailable")
+        raise error
 
     def _record(self, stage: str, provider: LiveProvider, reply: Reply) -> str:
         self.stages[stage] = {
+            "profile": provider.profile,
             "provider": provider.provider,
             "version": provider.version,
             "text": reply.text,
@@ -286,23 +418,81 @@ class LiveSession:
         return reply.text
 
     def plan(self, task: str) -> str:
-        self.attempted += 1
         self.task = task
-        self.plan_text = self._record("plan", self.lead, self.lead.ask(PLAN_PROMPT.format(task=task)))
+        self.plan_text = self._ask("plan", PLAN_PROMPT.format(task=task), self.lead)
         return self.plan_text
 
     def review(self, plan: str) -> str:
-        self.attempted += 1
         prompt = REVIEW_PROMPT.format(task=self.task, plan=plan)
-        return self._record("review", self.reviewer, self.reviewer.ask(prompt))
+        return self._ask("review", prompt, self.reviewer)
 
     def synthesize(self, review: str) -> str:
-        self.attempted += 1
         prompt = SYNTHESIS_PROMPT.format(task=self.task, plan=self.plan_text, review=review)
-        return self._record("synthesize", self.lead, self.lead.ask(prompt))
+        return self._ask("synthesize", prompt, self.lead)
 
     def details(self) -> dict[str, object]:
-        return {"stages": self.stages, "usage": total_usage(self.stages, self.attempted)}
+        rotating: dict[str, object] = {}
+        if self.rotation is not None:
+            rotating = {"rotation": self.rotation.policy.as_record(), "selection": self.selections}
+        return {
+            **rotating,
+            "stages": self.stages,
+            "usage": total_usage(self.stages, self.attempted),
+            "roster": self.roster(),
+            "exhausted": self.exhausted,
+            "attempted": self.attempted,
+            "task": self.task,
+            "workspace": str(self.lead.workspace) if self.lead.workspace is not None else None,
+        }
+
+
+def _saved_stages(stages: object) -> dict[str, dict[str, object]]:
+    """Keep finished live stages only when each one has text and usage."""
+    if stages is None:
+        return {}
+    if not isinstance(stages, dict):
+        raise ValueError("invalid stage record")
+    cleaned: dict[str, dict[str, object]] = {}
+    for name in ("plan", "review", "synthesize"):
+        if name not in stages:
+            continue
+        stage = stages[name]
+        if not isinstance(stage, dict) or not isinstance(stage.get("text"), str):
+            raise ValueError("invalid stage record")
+        usage = stage.get("usage")
+        if not isinstance(usage, dict) or usage.get("provenance") not in {"measured", "unknown", "partial"}:
+            raise ValueError("invalid stage record")
+        for key in ("input_tokens", "output_tokens"):
+            if key not in usage or not (usage[key] is None or type(usage[key]) is int):
+                raise ValueError("invalid stage record")
+        if usage["provenance"] == "measured" and (
+            usage["input_tokens"] is None or usage["output_tokens"] is None
+        ):
+            raise ValueError("invalid stage record")
+        cleaned[name] = dict(stage)
+    return cleaned
+
+
+def _saved_exhausted(exhausted: object) -> list[dict[str, object]]:
+    """Reject an entry that would not match a seat and would let that seat run again."""
+    if not isinstance(exhausted, list):
+        raise ValueError("invalid exhausted provider list")
+    cleaned: list[dict[str, object]] = []
+    for item in exhausted:
+        if not isinstance(item, dict):
+            raise ValueError("invalid exhausted provider list")
+        provider = item.get("provider")
+        profile = item.get("profile")
+        error = item.get("error")
+        if (
+            provider not in PROVIDERS
+            or (profile is not None and not isinstance(profile, str))
+            or not isinstance(error, str)
+            or not error
+        ):
+            raise ValueError("invalid exhausted provider list")
+        cleaned.append(dict(item))
+    return cleaned
 
 
 def total_usage(stages: dict[str, dict[str, object]], attempted: int | None = None) -> dict[str, object]:
