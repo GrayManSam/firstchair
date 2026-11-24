@@ -202,22 +202,29 @@ Invented success stream.
 {"type":"end","stopReason":"end_turn","usage":{"input_tokens":10,"output_tokens":3}}
 ```
 
-## Claude Swap alpha decision
+## Claude Swap bridge
 
-Defer the optional Claude Swap bridge. The alpha workflow runs offline and
-had no live Claude Code adapter at the time of this decision. Adding account status then would have introduced
-provider state and potential usage refreshes without improving the
-synthetic workflow. The earlier [pinned source review](upstream-review.md)
-covers version 1.2.0b1. No Claude Swap invocation or synthetic installation
-was needed for the decision to defer.
+Opt-in with `FIRSTCHAIR_CSWAP=1`. Each claude-swap slot becomes a Claude
+profile named `cswap-N`, usable with `--profile`, `--fallback claude:cswap-N`
+and `--rotate-accounts`. Implemented in `src/firstchair/cswap.py`. This
+replaces the earlier decision to defer the bridge, and follows the
+conditions it set: explicit opt-in, a synthetic executable tested for valid,
+stale, missing and unsupported answers, and no account identifiers in
+Firstchair output or records.
 
-If a later release needs quota visibility, evaluate an explicit opt-in
-reader for `cswap status --json`. Upstream documents a single JSON object
-with `schemaVersion: 1` and distinguishes current usage from cached,
-unavailable and last-known readings. Test a synthetic executable for
-valid, stale, missing and unsupported responses before enabling a reader.
-Keep any account identifiers out of persisted workflow records. Account
-switching and credential handling remain outside the proposed reader.
+| Step | Command | Contract |
+| --- | --- | --- |
+| Version gate | `cswap --version` | Exactly `cswap X.Y.Z`. Verified 1.2.0, compatible from 1.2.0 up to (not including) 1.3.0. Anything else, local builds included, is refused with `unsupported_provider_version` before a stage starts |
+| Slots and usage | `cswap list --json` | `schemaVersion` 1. From each `accounts[]` row: `number`, `usageStatus`, `usageAgeSeconds`, and `usage.fiveHour` / `usage.sevenDay` with `pct` and `resetsAt`. A row whose `usageStatus` is not `ok` counts as no reading, since cswap itself would not act on it. `email` and the other identity fields are not read |
+| Launch | `cswap run N -- CLAUDE_ARGS` | cswap sets `CLAUDE_CONFIG_DIR` to the slot's session profile and runs Claude Code with the arguments unchanged. stdin passes through. Since 1.2.0 its own notices go to stderr, so stdout is Claude's JSON alone |
+
+The usage reading sends no prompt, so a cswap profile is not throttled like
+the Claude `rate_limit_event` probe. Firstchair does not open cswap's files
+or credentials. Checked on the development host against claude-swap 1.2.0
+on 2026-11-24 with three real slots (read and dry-run only). No stage has
+been run through `cswap run` against a real account yet. A slot that is
+cswap's active default login runs on that login, which `cswap auto` may
+switch during a stage.
 [Claude Swap JSON output reference](https://github.com/realiti4/claude-swap/blob/main/docs/json-output.md)
 
 ## Live smoke attempt

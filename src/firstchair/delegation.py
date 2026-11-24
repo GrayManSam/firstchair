@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
+from . import cswap
 from .accounts import CREDENTIAL_OVERRIDES, HOME_VARIABLE, account_environment, list_profiles
 from .claude_json import parse_claude_json
 from .codex_jsonl import CodexUsage, parse_codex_jsonl
@@ -904,6 +905,9 @@ def launch_job(
             prompt_file.write_text(build_prompt(job, task), encoding="utf-8")
             reply_file = runtime_dir / "reply.md"
             argv, use_stdin = build_command(job, prompt_file, reply_file)
+            if cswap.is_cswap_profile(job.provider, choice.account.profile):
+                # Run the same claude worker on the cswap slot.
+                argv = cswap.wrap_command(argv, choice.account.profile, cswap.require_cswap(env))
             if confine:
                 argv = [*confinement(job, list(getattr(args, "hide", None) or [], ), env), *argv]
             code, elapsed = run_worker(

@@ -251,6 +251,11 @@ def read_claude_quota(executable: str, env: dict[str, str], *, timeout: float = 
 
 def read_quota(provider: str, profile: str | None, *, timeout: float = 15.0) -> Quota | None:
     """The account's real usage, or None when this provider cannot be asked."""
+    from . import cswap
+
+    if cswap.is_cswap_profile(provider, profile):
+        # cswap already measured it: read its report instead of probing.
+        return cswap.read_quota(profile)
     if provider not in READERS:
         return None
     from .live import find_executable, live_environment, provider_version  # live imports rotation.

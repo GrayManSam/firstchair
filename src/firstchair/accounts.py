@@ -75,6 +75,17 @@ def profile_home(provider: str, name: str, *, create: bool = False) -> Path:
 
 
 def account_environment(provider: str, name: str, *, create: bool = False) -> dict[str, str]:
+    from . import cswap
+
+    if cswap.is_cswap_profile(provider, name):
+        # A claude-swap slot: cswap owns the login and `cswap run` sets the
+        # config home, so only the credential overrides are removed here.
+        if create:
+            raise ValueError("cswap accounts are added with `cswap add`, not firstchair auth login")
+        return {
+            key: value for key, value in cswap.environment().items()
+            if key not in CREDENTIAL_OVERRIDES
+        }
     home = profile_home(provider, name, create=create)
     env = {key: value for key, value in os.environ.items() if key not in CREDENTIAL_OVERRIDES}
     env.update({HOME_VARIABLE[provider]: str(home)})
@@ -111,6 +122,10 @@ def list_profiles() -> list[dict[str, str]]:
                 for candidate in sorted(directory.iterdir()):
                     profile_home(provider, candidate.name)
                     profiles.append({"provider": provider, "profile": candidate.name})
+    # claude-swap slots, when the bridge is enabled (FIRSTCHAIR_CSWAP=1).
+    from . import cswap
+
+    profiles.extend(cswap.list_profiles())
     return profiles
 
 

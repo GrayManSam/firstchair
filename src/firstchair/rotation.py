@@ -35,6 +35,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
 
+from . import cswap
 from .accounts import private_directory, profile_root
 from .fallback import is_transient
 from .parallel import run_bounded
@@ -310,7 +311,9 @@ class Rotation:
             if key in self.unreadable and not force:
                 continue
             limit = (
-                self.policy.costly_quota_max_age if seat.provider in PROBE_COSTS_USAGE
+                self.policy.costly_quota_max_age
+                if seat.provider in PROBE_COSTS_USAGE
+                and not cswap.is_cswap_profile(seat.provider, seat.profile)
                 else self.policy.quota_max_age
             )
             saved = accounts.get(key, {}).get("quota")

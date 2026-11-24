@@ -174,6 +174,20 @@ stage. A resumed run keeps the same lead and reviewer.
 - Add `--retry-exhausted` to try the skipped seats again, for example
   after a limit resets.
 
+### Use claude-swap accounts
+
+If you keep several Claude logins in [claude-swap](https://github.com/realiti4/claude-swap)
+(1.2.0 or later), set `FIRSTCHAIR_CSWAP=1` and each cswap slot becomes a
+Claude profile named `cswap-N`. No separate `firstchair auth login` is
+needed, and reading their usage sends no prompt.
+
+```sh
+export FIRSTCHAIR_CSWAP=1
+firstchair run --provider claude --profile cswap-2 --fallback claude:cswap-3 "Review the parser"
+firstchair delegate run claude --rotate-accounts "Review the parser tests"
+```
+
+Details are in [provider contracts](docs/provider-contracts.md#claude-swap-bridge).
 ## Safety and privacy
 
 - **Read-only providers.** Codex uses its `read-only` sandbox. Claude Code

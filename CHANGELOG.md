@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Opt-in claude-swap bridge (`FIRSTCHAIR_CSWAP=1`): each cswap slot is a
+  Claude profile `cswap-N` for `--profile`, `--fallback` and
+  `--rotate-accounts`. Stages and workers run through `cswap run N --`, and
+  usage comes from `cswap list --json` with no prompt sent. Requires
+  claude-swap 1.2.x; other versions are refused.
+- Tagged releases also publish the verified wheel and sdist to PyPI through
+  trusted publishing.
 - `delegate run --confine` runs the worker inside bubblewrap and hides the
   project's other checkouts, common secret stores and the other providers'
   files. `--hide PATH` hides more and implies `--confine`. The run is

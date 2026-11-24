@@ -18,6 +18,7 @@ from time import monotonic
 from typing import BinaryIO
 from typing import Any
 
+from . import cswap
 from .accounts import CREDENTIAL_OVERRIDES, HOME_VARIABLE, account_environment, profile_home
 from .fallback import is_transient
 from .rotation import Rotation, account_key
@@ -167,11 +168,12 @@ class LiveProvider:
     deadline: float | None = None
     version: str | None = None
     executable: str | None = None
+    cswap_executable: str | None = None  # set by prepare() for a cswap-N profile
 
     def __post_init__(self) -> None:
         if self.provider not in PROVIDERS:
             raise ValueError(f"unknown live provider {self.provider}")
-        if self.profile is not None:
+        if self.profile is not None and not cswap.is_cswap_profile(self.provider, self.profile):
             profile_home(self.provider, self.profile)  # Reject unknown or unsafe profiles early.
         if self.workspace is not None:
             self.workspace = self.workspace.resolve()
@@ -185,6 +187,9 @@ class LiveProvider:
             executable = find_executable(self.provider, env)
             version = provider_version(self.provider, env, executable)
             check_version(self.provider, version)
+            if cswap.is_cswap_profile(self.provider, self.profile):
+                # Gate cswap as strictly as the provider: refuse before any stage.
+                self.cswap_executable = cswap.require_cswap(env)
             self.executable, self.version = executable, version
         return self.version
 
@@ -208,6 +213,9 @@ class LiveProvider:
                 prompt_file.write_bytes(payload)
                 argv, use_stdin = build_command(self.provider, self.workspace, prompt_file)
                 argv = (self.executable or find_executable(self.provider, env), *argv[1:])
+                if cswap.is_cswap_profile(self.provider, self.profile):
+                    # Same claude arguments, launched on the cswap slot.
+                    argv = tuple(cswap.wrap_command(argv, self.profile, self.cswap_executable))
                 cwd = str(self.workspace) if self.workspace is not None else scratch
                 with TemporaryFile() as request:
                     if use_stdin:
