@@ -68,7 +68,9 @@ print(json.dumps({
 
 class DelegateTests(unittest.TestCase):
     def setUp(self):
-        self.temp = Path(tempfile.mkdtemp(prefix="firstchair-delegate-test-"))
+        # Resolved: on macOS the temp dir is under /var, a symlink to
+        # /private/var, and git and Firstchair report the real path.
+        self.temp = Path(tempfile.mkdtemp(prefix="firstchair-delegate-test-")).resolve()
         self.addCleanup(shutil.rmtree, self.temp, ignore_errors=True)
         self.repo = self.temp / "repo"
         self.repo.mkdir()
