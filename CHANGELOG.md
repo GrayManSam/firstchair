@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0a3
+
 - Opt-in claude-swap bridge (`FIRSTCHAIR_CSWAP=1`): each cswap slot is a
   Claude profile `cswap-N` for `--profile`, `--fallback` and
   `--rotate-accounts`. Stages and workers run through `cswap run N --`, and

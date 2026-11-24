@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "firstchair"
-version = "0.1.0a2"
+version = "0.1.0a3"
 description = "Local-first CLI that makes Codex, Claude Code and Grok review each other's work"
 readme = "README.md"
 requires-python = ">=3.12"

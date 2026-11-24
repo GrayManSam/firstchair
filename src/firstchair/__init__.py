@@ -7,7 +7,7 @@ from pathlib import Path
 try:
     __version__ = version("firstchair")
 except PackageNotFoundError:
-    __version__ = "0.1.0a2"
+    __version__ = "0.1.0a3"
 
 
 def checkout_commit(root: Path) -> str | None:

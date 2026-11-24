@@ -32,7 +32,7 @@ firstchair run --provider codex --reviewer claude --workspace . --format text \
 - **Multi-agent development for maintainers.** `firstchair conduct` runs
   several workers in isolated Git worktrees, with cancel and resume.
 
-Firstchair is alpha software (`0.1.0a2`). Interfaces can change before 1.0.
+Firstchair is alpha software (`0.1.0a3`). Interfaces can change before 1.0.
 
 ## Contents
 
