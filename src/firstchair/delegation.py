@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import math
 import os
@@ -39,7 +40,7 @@ from .codex_jsonl import CodexUsage, parse_codex_jsonl
 from .provider import ProviderError
 from .quota import read_quota
 from .redaction import _is_secret_name, redact_record
-from .rotation import Policy, Rotation, account_key, ledger_path
+from .rotation import Policy, Rotation, account_key, ledger_path, record
 from .sessions import SESSION_ENV, require_owner, resolve_session
 from .usage import parse_usage
 from .versions import check_version, read_version
@@ -64,6 +65,8 @@ NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 # Read reviews of a real project have taken up to 20 minutes, so both modes get 30.
 DEFAULT_TIMEOUT = {"read": 1800, "write": 1800}
 STDERR_TAIL = 2000
+# Holds the hash of the edits `delegate apply` last took from a job.
+APPLIED_MARK = "applied"
 # What --confine hides from a worker besides the project's other checkouts.
 SECRET_STORES = (
     ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".netrc", ".npmrc", ".pypirc",
@@ -86,7 +89,7 @@ You are a {provider} worker dispatched by the lead {lead} session for the
 Rules for this task:
 - Read AGENTS.md first and follow it, plus any instructions below.
 - Mode: {mode}. {mode_rule}
-- Do not run git commit, push, merge, rebase, reset, checkout or branch commands.
+{prepared}- Do not run git commit, push, merge, rebase, reset, checkout or branch commands.
   Do not install packages. Do not use the network except for your own model API.
 - Never read or copy .firstchair/, .triadmux/, credentials, transcripts or account data.
   Use invented fixtures only.
@@ -101,6 +104,13 @@ End your reply with these sections, in this order:
 
 Task:
 """
+
+PREPARED_RULE = (
+    "- The lead ran this setup command in the worktree before you started: {command}\n"
+    "  Use what it left there to run the tests. Do not repeat it.\n"
+)
+# The most of each worker stream that --keep-logs saves.
+LOG_LIMIT = 8 * 1024 * 1024
 
 MODE_RULES = {
     "read": "Do not create, edit or delete files. Investigate and report only.",
@@ -144,6 +154,7 @@ class Job:
     effort: str | None = None
     lead: str = "claude"
     base: str = "HEAD"
+    prepare: str | None = None
 
     @property
     def branch(self) -> str | None:
@@ -282,6 +293,7 @@ def build_prompt(job: Job, task: str) -> str:
     preamble = PREAMBLE.format(
         provider=LEAD_NAMES[job.provider], lead=LEAD_NAMES[job.lead],
         repo=project_name(job.repo), mode=job.mode, mode_rule=MODE_RULES[job.mode],
+        prepared=PREPARED_RULE.format(command=job.prepare) if job.prepare else "",
     )
     return preamble + task.strip() + "\n"
 
@@ -690,8 +702,23 @@ def apply_job(args: argparse.Namespace) -> int:
         (*command[:3], "apply", "--numstat", "-z"), input=patch, capture_output=True, check=True,
     ).stdout.decode("utf-8", errors="replace")
     names = [entry.split("\t", 2)[2] for entry in files.split("\0") if entry.count("\t") >= 2]
+    # Lets finish tell edits the lead already took from edits nobody has.
+    with contextlib.suppress(OSError):
+        (delegation_dir(repo, args.name) / APPLIED_MARK).write_text(
+            hashlib.sha256(patch).hexdigest() + "\n", encoding="utf-8",
+        )
     print(json.dumps({"name": args.name, "applied": True, "to": str(target), "files": names}, indent=2))
     return 0
+
+
+def edits_applied(repo: Path, name: str) -> bool:
+    """True when the job's current edits are exactly the ones ``delegate apply`` last took."""
+    try:
+        saved = (delegation_dir(repo, name) / APPLIED_MARK).read_text(encoding="utf-8").strip()
+        _, patch = job_patch(repo, name)
+    except (OSError, UnicodeError, DelegateError, subprocess.CalledProcessError):
+        return False
+    return bool(saved) and saved == hashlib.sha256(patch).hexdigest()
 
 
 def worktree_changes(worktree: Path) -> dict[str, str]:
@@ -833,6 +860,40 @@ def dispatch(args: argparse.Namespace) -> int:
     return code
 
 
+def check_prepare(command: str | None) -> str | None:
+    if command is None:
+        return None
+    if not command.strip() or "\n" in command or len(command) > 2000:
+        raise DelegateError("--prepare must be one line of at most 2000 characters")
+    return command.strip()
+
+
+def shell_command(command: str) -> list[str]:
+    """The argv that runs the lead's --prepare text through the platform shell."""
+    return ["/bin/sh", "-c", command] if os.name == "posix" else ["cmd", "/c", command]
+
+
+def save_logs(job: Job, runtime_dir: Path, label: str) -> None:
+    """Keep the end of a run's output beside the job record, readable only by the owner.
+
+    The streams can hold the task and the reply, so this happens only on request
+    and ``delegate finish`` removes them with the record.
+    """
+    for stream in ("stdout", "stderr"):
+        source = runtime_dir / f"{stream}.log"
+        try:
+            with source.open("rb") as handle:
+                handle.seek(max(0, source.stat().st_size - LOG_LIMIT))
+                text = handle.read().decode("utf-8", errors="replace")
+            kept = redact_record({"text": text})["text"]
+            target = job.log_dir / f"{label}.{stream}.log"
+            with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w",
+                           encoding="utf-8") as out:
+                out.write(str(kept))
+        except OSError:
+            continue
+
+
 def launch_job(
     args: argparse.Namespace, *,
     stop: threading.Event | None = None,
@@ -856,7 +917,9 @@ def launch_job(
         timeout=timeout,
         model=args.model, effort=args.effort, lead=args.lead,
         base=resolve_base(repo, getattr(args, "base", None), args.with_changes),
+        prepare=check_prepare(getattr(args, "prepare", None)),
     )
+    keep_logs = bool(getattr(args, "keep_logs", False))
     confine = getattr(args, "confine", False) or bool(getattr(args, "hide", None))
 
     def guard() -> contextlib.AbstractContextManager[object]:
@@ -885,6 +948,8 @@ def launch_job(
     accepted = False
     stderr_tail = ""
     worker_base = ""
+    prepared: dict[str, object] | None = None
+    cache: dict[str, int] = {}
     try:
         with guard():
             if args.with_changes:
@@ -895,43 +960,64 @@ def launch_job(
                     git(job.worktree, "add", "--all")
                     git(job.worktree, "commit", "-q", "--no-verify", "-m",
                         f"Carry lead's uncommitted changes into delegate {name}")
+        if job.prepare:
+            # The lead's own command, run with the worker's environment and outside
+            # the worker's sandbox, so it can fetch what the tests need.
+            with tempfile.TemporaryDirectory(prefix="firstchair-prepare-") as scratch:
+                setup_code, setup_seconds = run_worker(
+                    shell_command(job.prepare), None, job, Path(scratch), env, stop,
+                )
+                prepared = {"exit_code": setup_code, "seconds": round(setup_seconds, 1)}
+                if setup_code != 0:
+                    with contextlib.suppress(OSError):
+                        raw = (Path(scratch) / "stderr.log").read_bytes()[-STDERR_TAIL:]
+                        stderr_tail = raw.decode("utf-8", errors="replace").strip()
+                if keep_logs:
+                    save_logs(job, Path(scratch), "prepare")
+        with guard():
             baseline = worktree_changes(job.worktree)["status"]
             # The worker's edits are everything after this commit, carried work excluded.
             worker_base = git(job.worktree, "rev-parse", "HEAD").strip()
             write_status(job, session, "running", started_at, worker_base=worker_base)
-        with tempfile.TemporaryDirectory(prefix="firstchair-delegate-") as scratch:
-            runtime_dir = Path(scratch)
-            prompt_file = runtime_dir / "prompt.md"
-            prompt_file.write_text(build_prompt(job, task), encoding="utf-8")
-            reply_file = runtime_dir / "reply.md"
-            argv, use_stdin = build_command(job, prompt_file, reply_file)
-            if cswap.is_cswap_profile(job.provider, choice.account.profile):
-                # Run the same claude worker on the cswap slot.
-                argv = cswap.wrap_command(argv, choice.account.profile, cswap.require_cswap(env))
-            if confine:
-                argv = [*confinement(job, list(getattr(args, "hide", None) or [], ), env), *argv]
-            code, elapsed = run_worker(
-                argv, prompt_file if use_stdin else None, job, runtime_dir, env, stop,
-                private=choice.account.profile is not None,
-            )
-            usage = worker_usage(job, code, runtime_dir)
-            reply = ""
-            cache: dict[str, int] = {}
-            accepted = code == 0
-            if code == 0 and provider == "claude":
-                try:
-                    reply, usage = read_claude_reply(runtime_dir)
-                except ProviderError:
-                    accepted = False
-            elif code == 0:
-                reply = extract_reply(job, reply_file, runtime_dir)
-            if accepted:
-                cache = cache_split(job, usage, runtime_dir)
-            if not accepted:
-                # The logs go with the temporary directory. Keep the end for diagnosis.
-                with contextlib.suppress(OSError):
-                    raw = (runtime_dir / "stderr.log").read_bytes()[-STDERR_TAIL:]
-                    stderr_tail = raw.decode("utf-8", errors="replace").strip()
+        if prepared is not None and prepared["exit_code"] != 0:
+            # Setup failed, so no worker starts and no usage is spent.
+            code, elapsed = setup_code, setup_seconds
+            usage, reply = CodexUsage(), ""
+        else:
+            with tempfile.TemporaryDirectory(prefix="firstchair-delegate-") as scratch:
+                runtime_dir = Path(scratch)
+                prompt_file = runtime_dir / "prompt.md"
+                prompt_file.write_text(build_prompt(job, task), encoding="utf-8")
+                reply_file = runtime_dir / "reply.md"
+                argv, use_stdin = build_command(job, prompt_file, reply_file)
+                if cswap.is_cswap_profile(job.provider, choice.account.profile):
+                    # Run the same claude worker on the cswap slot.
+                    argv = cswap.wrap_command(argv, choice.account.profile, cswap.require_cswap(env))
+                if confine:
+                    argv = [*confinement(job, list(getattr(args, "hide", None) or [], ), env), *argv]
+                code, elapsed = run_worker(
+                    argv, prompt_file if use_stdin else None, job, runtime_dir, env, stop,
+                    private=choice.account.profile is not None,
+                )
+                usage = worker_usage(job, code, runtime_dir)
+                reply = ""
+                accepted = code == 0
+                if code == 0 and provider == "claude":
+                    try:
+                        reply, usage = read_claude_reply(runtime_dir)
+                    except ProviderError:
+                        accepted = False
+                elif code == 0:
+                    reply = extract_reply(job, reply_file, runtime_dir)
+                if accepted:
+                    cache = cache_split(job, usage, runtime_dir)
+                if not accepted:
+                    # The logs go with the temporary directory. Keep the end for diagnosis.
+                    with contextlib.suppress(OSError):
+                        raw = (runtime_dir / "stderr.log").read_bytes()[-STDERR_TAIL:]
+                        stderr_tail = raw.decode("utf-8", errors="replace").strip()
+                if keep_logs:
+                    save_logs(job, runtime_dir, "worker")
         with guard():
             changes = worktree_changes(job.worktree)
     except Terminated:
@@ -966,12 +1052,22 @@ def launch_job(
         "changes": changes,
         "reply": reply if len(reply) <= REPLY_LIMIT else reply[:REPLY_LIMIT] + "\n[truncated]",
     }
+    if prepared is not None:
+        summary["prepare"] = prepared
     if choice.rotation is not None:
         summary["account"] = account_key(provider, choice.account.profile)
         summary["account_candidates"] = choice.candidates
         if status == "completed":
             # Count the work against the account. A failed worker's cause is not known.
             choice.rotation.observe(choice.account, usage, None)
+    elif status == "completed":
+        # Without rotation the work still counts, so `auth usage` and a later
+        # rotated run see it. A ledger that cannot be written does not lose the result.
+        with contextlib.suppress(OSError, ValueError):
+            record(
+                ledger_path(), account_key(provider, choice.account.profile), Policy(),
+                now=time.time(), usage=usage,
+            )
     if stderr_tail:
         summary["stderr_tail"] = stderr_tail
     if job.mode == "write" and status == "completed" and changes["status"] == baseline:
@@ -1144,11 +1240,16 @@ def finish(args: argparse.Namespace) -> int:
     deleted = False
     if job is not None:
         worktree = Path(job["worktree"])
-        if worktree_changes(worktree)["status"] and not args.force:
-            raise DelegateError(f"{args.name} has uncommitted changes; collect it or pass --force")
+        dirty = bool(worktree_changes(worktree)["status"])
+        # Edits the lead took with apply are safe elsewhere, so they need no --force.
+        taken = dirty and not args.force and bool(job["branch"]) and edits_applied(repo, args.name)
+        if dirty and not (args.force or taken):
+            raise DelegateError(
+                f"{args.name} has uncommitted changes; collect it, apply it or pass --force"
+            )
         remove_worktree(repo, worktree)
         if args.delete_branch and job["branch"]:
-            git(repo, "branch", "-D" if args.force else "-d", job["branch"])
+            git(repo, "branch", "-D" if args.force or taken else "-d", job["branch"])
             deleted = True
     shutil.rmtree(logs, ignore_errors=True)
     print(json.dumps({"name": args.name, "removed": job is not None, "branch_deleted": deleted}))
@@ -1205,6 +1306,17 @@ def configure_parser(root: argparse.ArgumentParser) -> None:
     run.add_argument(
         "--with-changes", action="store_true",
         help="Copy the checkout's uncommitted and untracked files into the worktree",
+    )
+    run.add_argument(
+        "--prepare", metavar="COMMAND",
+        help="Run this shell command in the worktree before the worker starts, outside the "
+             "worker's sandbox and with the worker's environment, for example to install "
+             "the test dependencies. The worker does not start when it fails",
+    )
+    run.add_argument(
+        "--keep-logs", action="store_true",
+        help="Save the end of the worker's output in the job's log folder (readable only by "
+             "you) until delegate finish. It can hold the task and the reply",
     )
     run.set_defaults(handler=dispatch)
 

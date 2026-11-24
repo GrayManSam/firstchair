@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from firstchair import conductor
 from firstchair import delegation as delegate
 from firstchair.cli import main
 
@@ -121,6 +122,8 @@ class ConductorTests(unittest.TestCase):
             "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
             "FIRSTCHAIR_WORKTREE_ROOT": str(self.temp / "worktrees"),
             "FIRSTCHAIR_SESSION": "fixture-session",
+            # Every finished worker is counted, so the ledger must not be the user's own.
+            "XDG_STATE_HOME": str(self.temp / "state"),
             "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
             "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
         }
@@ -953,6 +956,80 @@ class ConductorTests(unittest.TestCase):
         self.assertEqual((worktree / "added.txt").read_text(encoding="utf-8"), "invented change\n")
         self.assertFalse((self.repo / "added.txt").exists())
         self.assertEqual((self.repo / "README.md").read_text(encoding="utf-8"), "lead edit\n")
+
+    def test_score_options_reach_each_worker_and_a_part_overrides_the_defaults(self):
+        self._git("checkout", "-q", "-b", "feature")
+        (self.repo / "feature.txt").write_text("only on the feature branch\n")
+        self._git("add", "feature.txt")
+        self._git("commit", "-q", "-m", "feature")
+        self._git("checkout", "-q", "main")
+        hidden = str(self.temp / "private")
+        path = self.temp / "options.json"
+        path.write_text(json.dumps({
+            "defaults": {"base": "feature", "hide": [hidden], "effort": "high",
+                         "prepare": "echo ready > setup.txt", "keep_logs": True},
+            "parts": [
+                self._part("build", "codex", "write", model="invented-model"),
+                self._part("look", "auto", base="main", confine=True, hide=[]),
+            ],
+        }), encoding="utf-8")
+        code, output, error = self._main("plan", "--lead", "claude", "--score", str(path))
+        self.assertEqual(code, 0, error)
+        build, look = json.loads(output)["parts"]
+        self.assertEqual(
+            (build["base"], build["confined"], build["model"], build["effort"], build["prepare"]),
+            ("feature", True, "invented-model", "high", "echo ready > setup.txt"),
+        )
+        self.assertEqual((look["base"], look["confined"]), ("main", True))
+        self.assertNotIn("effort", look)
+        seen = []
+        real = conductor.launch_job
+
+        def launch(namespace, **keywords):
+            seen.append(namespace)
+            # The fixture host may have no bubblewrap, so the sandbox is not started here.
+            namespace.confine, namespace.hide = False, []
+            return real(namespace, **keywords)
+
+        with mock.patch.object(conductor, "launch_job", launch):
+            code, output, error = self._main(
+                "run", "--lead", "claude", "--name", "options", "--score", str(path),
+            )
+        self.assertEqual(code, 0, error)
+        self.assertEqual(
+            [(item.base, item.model, item.effort, item.prepare, item.keep_logs) for item in seen],
+            [("feature", "invented-model", "high", "echo ready > setup.txt", True),
+             ("main", None, None, "echo ready > setup.txt", True)],
+        )
+        worktree = self.temp / "worktrees" / "repo" / "build"
+        self.assertTrue((worktree / "feature.txt").exists())
+        self.assertEqual((worktree / "setup.txt").read_text(), "ready\n")
+        self.assertTrue((self.repo / ".firstchair" / "delegations" / "build" / "worker.stdout.log").exists())
+        board = (self.repo / ".firstchair" / "conduct" / "options" / "board.json").read_text()
+        self.assertNotIn(hidden, board)
+        code, _, error = self._main(
+            "run", "--lead", "claude", "--name", "carried", "--score", str(path), "--with-changes",
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--with-changes", error)
+
+    def test_score_refuses_options_it_cannot_honor(self):
+        for defaults, part, expected in (
+            ({"hide": ["relative/path"]}, {}, "absolute"),
+            ({"confine": "yes"}, {}, "true or false"),
+            ({"limit": 2}, {}, "defaults may set only"),
+            ({}, {"model": "invented-model"}, "named seat"),
+            ({}, {"prepare": "one\ntwo"}, "--prepare"),
+            ({}, {"base": ""}, "must be text"),
+        ):
+            with self.subTest(expected=expected):
+                path = self.temp / "refused.json"
+                path.write_text(json.dumps({
+                    "defaults": defaults, "parts": [self._part("only", "auto", **part)],
+                }), encoding="utf-8")
+                code, output, error = self._main("plan", "--lead", "claude", "--score", str(path))
+                self.assertEqual((code, output), (2, ""))
+                self.assertIn(expected, error)
 
 
 if __name__ == "__main__":

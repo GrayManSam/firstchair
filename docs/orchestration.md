@@ -131,6 +131,30 @@ without starting a worker when the earlier part returned an empty reply.
 }
 ```
 
+A part can also set how its worker runs: `base` (the ref its worktree
+starts from), `confine` and `hide` (the bubblewrap sandbox described under
+worker isolation), `model` and `effort` (named seats only), `prepare` (one
+shell command the conductor runs in the worktree before the worker) and
+`keep_logs`. A top-level `"defaults"` object sets the same fields for every
+part, and a part's own value wins. `base` does not combine with
+`--with-changes`. The board does not store hidden paths.
+
+```json
+{
+  "defaults": {"base": "origin/main", "confine": true, "hide": ["/home/me/private"],
+               "prepare": "cd backend && uv sync --frozen"},
+  "parts": [
+    {"name": "build", "seat": "codex", "mode": "write", "effort": "high", "task": "Fix the parser"},
+    {"name": "review", "seat": "grok", "mode": "read", "after": "build",
+     "task": "Check the claims in the earlier reply against the source"}
+  ]
+}
+```
+
+A follow-up reads the earlier part's reply, not its uncommitted edits. To
+have a second worker review a write part's diff, collect the part and start
+the review from `delegate/NAME` with `base`.
+
 ```sh
 firstchair conduct plan --lead grok --score score.json
 firstchair conduct run --lead grok --name rehearsal --score score.json
@@ -232,8 +256,30 @@ The worker keeps its worktree, its own CLI's home and the rest of the
 system. This is a list of hidden places, not a list of allowed ones: name
 any other private directory with `--hide`. Without bubblewrap the run is
 refused. Checked with Codex CLI 0.171.0 and Grok Build 1.0.77 on Linux.
+
+### Let a worker run the tests
+
+A fresh worktree has no installed dependencies, and a worker has no network
+and may not install packages. `--prepare COMMAND` runs one shell command in
+the worktree before the worker starts, for example
+`--prepare 'cd backend && uv sync --frozen'`. It is the lead's command: it
+runs outside the worker's sandbox and outside `--confine`, with the worker's
+secret-free environment, and counts toward the job's timeout. Keep what it
+writes to ignored paths such as a virtual environment, because tracked files
+it changes become part of the job's edits. The worker's prompt names the
+command. When it fails or times out no worker starts, and the summary shows
+its exit code under `prepare` and the end of its stderr.
+
+`delegate finish NAME` refuses a job with uncommitted edits unless the lead
+collected them, or applied them with `delegate apply` and nothing changed
+since. `--force` discards edits nobody has taken.
+
 The dispatcher saves job metadata locally and removes temporary prompt and
-provider output files when the invocation ends. Run
+provider output files when the invocation ends. `--keep-logs` keeps the last
+8 MiB of the worker's stdout and stderr in the job's log folder, readable
+only by you, until `delegate finish`. They can hold the task and the reply.
+A completed worker counts against its account in `firstchair auth usage`
+with or without `--rotate-accounts`. Run
 `PYTHONPATH=src python -m unittest discover -s tests -v` before integrating.
 The lead owns Git integration.
 
